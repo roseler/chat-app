@@ -31,7 +31,6 @@ A secure, end-to-end encrypted chat application with user authentication, featur
 chat-app/
 ├── frontend/          # React frontend application
 ├── backend/           # Node.js backend server
-├── PROJECT_PLAN.md    # Detailed project plan
 └── README.md          # This file
 ```
 
