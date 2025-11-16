@@ -9,21 +9,6 @@ class Message {
     return result.id;
   }
 
-  static async getConversation(userId1, userId2, limit = 50) {
-    return await db.query(
-      `SELECT m.*, 
-              s.username as sender_username,
-              r.username as receiver_username
-       FROM messages m
-       JOIN users s ON m.sender_id = s.id
-       JOIN users r ON m.receiver_id = r.id
-       WHERE (m.sender_id = ? AND m.receiver_id = ?) 
-          OR (m.sender_id = ? AND m.receiver_id = ?)
-       ORDER BY m.timestamp DESC
-       LIMIT ?`,
-      [userId1, userId2, userId2, userId1, limit]
-    );
-  }
 
   static async markAsRead(messageId, userId) {
     await db.run(

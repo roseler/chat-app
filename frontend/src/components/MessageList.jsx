@@ -1,9 +1,23 @@
 import React from 'react';
 
-const MessageList = ({ messages, loading, messagesEndRef }) => {
+const MessageList = ({ messages, loading, messagesEndRef, isTyping, typingUser }) => {
   const formatTime = (timestamp) => {
     const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    // Show relative time for recent messages
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+
+    // Show date for older messages
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + 
+           date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   if (loading) {
@@ -31,11 +45,28 @@ const MessageList = ({ messages, loading, messagesEndRef }) => {
               {message.content || '(empty message)'}
             </div>
             <div className="message-info">
-              {formatTime(message.timestamp)}
+              <span className="message-time">{formatTime(message.timestamp)}</span>
+              {message.isSent && (
+                <span className="message-status">
+                  {message.read_status ? '✓✓' : '✓'}
+                </span>
+              )}
             </div>
           </div>
         );
       })}
+      {isTyping && (
+        <div className="message received">
+          <div className="message-bubble typing-indicator">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div className="message-info">
+            {typingUser} is typing...
+          </div>
+        </div>
+      )}
       <div ref={messagesEndRef} />
     </div>
   );

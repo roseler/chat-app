@@ -10,8 +10,11 @@ const ChatWindow = ({ selectedUser, currentUser, onMenuClick }) => {
   const [messages, setMessages] = useState([]);
   const [socket, setSocket] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isTyping, setIsTyping] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
   const messagesEndRef = useRef(null);
   const selectedUserRef = useRef(selectedUser);
+  const typingTimeoutRef = useRef(null);
   
   // Keep ref updated
   useEffect(() => {
@@ -35,24 +38,56 @@ const ChatWindow = ({ selectedUser, currentUser, onMenuClick }) => {
 
     // Connection event listeners
     newSocket.on('connect', () => {
+      setConnectionStatus('connected');
       if (process.env.NODE_ENV === 'development') {
         console.log('Socket connected');
       }
     });
 
     newSocket.on('disconnect', () => {
+      setConnectionStatus('disconnected');
       if (process.env.NODE_ENV === 'development') {
         console.log('Socket disconnected');
       }
     });
 
     newSocket.on('connect_error', (error) => {
-      console.error('Socket connection error');
+      setConnectionStatus('error');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Socket connection error');
+      }
     });
 
     newSocket.on('reconnect', () => {
+      setConnectionStatus('connected');
       if (process.env.NODE_ENV === 'development') {
         console.log('Socket reconnected');
+      }
+    });
+
+    // Typing indicator listeners
+    newSocket.on('user_typing', (data) => {
+      const currentSelectedUser = selectedUserRef.current;
+      if (currentSelectedUser && parseInt(data.userId) === parseInt(currentSelectedUser.id)) {
+        setIsTyping(true);
+        // Clear existing timeout
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
+        // Hide typing indicator after 3 seconds
+        typingTimeoutRef.current = setTimeout(() => {
+          setIsTyping(false);
+        }, 3000);
+      }
+    });
+
+    newSocket.on('user_stopped_typing', (data) => {
+      const currentSelectedUser = selectedUserRef.current;
+      if (currentSelectedUser && parseInt(data.userId) === parseInt(currentSelectedUser.id)) {
+        setIsTyping(false);
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
       }
     });
 
@@ -98,6 +133,11 @@ const ChatWindow = ({ selectedUser, currentUser, onMenuClick }) => {
       newSocket.off('disconnect');
       newSocket.off('connect_error');
       newSocket.off('reconnect');
+      newSocket.off('user_typing');
+      newSocket.off('user_stopped_typing');
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
       newSocket.close();
     };
   }, [currentUser]); // Only recreate when currentUser changes, not selectedUser
@@ -273,15 +313,20 @@ const ChatWindow = ({ selectedUser, currentUser, onMenuClick }) => {
             ☰
           </button>
         )}
-        <h3>{selectedUser.username}</h3>
-        {process.env.NODE_ENV === 'development' && (
-          <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>
-            Messages: {messages.length} | Socket: {socket?.connected ? '✅' : '❌'}
+        <div className="chat-header-info">
+          <h3>{selectedUser.username}</h3>
+          <div className="chat-header-status">
+            {selectedUser.isOnline && (
+              <span className="online-indicator" title="Online">●</span>
+            )}
+            <span className={`connection-status ${connectionStatus}`} title={connectionStatus}>
+              {connectionStatus === 'connected' ? '●' : connectionStatus === 'connecting' ? '○' : '✕'}
+            </span>
           </div>
-        )}
+        </div>
       </div>
-      <MessageList messages={messages} loading={loading} messagesEndRef={messagesEndRef} />
-      <MessageInput onSend={handleSendMessage} />
+      <MessageList messages={messages} loading={loading} messagesEndRef={messagesEndRef} isTyping={isTyping} typingUser={selectedUser.username} />
+      <MessageInput onSend={handleSendMessage} socket={socket} selectedUser={selectedUser} />
     </div>
   );
 };

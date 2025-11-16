@@ -1,20 +1,82 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
+const validator = require('validator');
 const User = require('../models/User');
 const { generateToken } = require('../middleware/auth');
 
+// Rate limiting
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per window
+  message: 'Too many login attempts. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 3, // 3 registrations per hour
+  message: 'Too many registration attempts. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Input validation helpers
+const validateEmail = (email) => {
+  return validator.isEmail(email) && validator.isLength(email, { max: 255 });
+};
+
+const validateUsername = (username) => {
+  return validator.isAlphanumeric(username.replace(/[_-]/g, '')) && 
+         validator.isLength(username, { min: 3, max: 30 });
+};
+
+const validatePassword = (password) => {
+  // At least 8 characters, 1 uppercase, 1 lowercase, 1 number
+  const hasMinLength = password.length >= 8;
+  const hasUpperCase = /[A-Z]/.test(password);
+  const hasLowerCase = /[a-z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  
+  return hasMinLength && hasUpperCase && hasLowerCase && hasNumber;
+};
+
+const sanitizeInput = (input) => {
+  if (typeof input !== 'string') return '';
+  return validator.escape(validator.trim(input));
+};
+
 // Register
-router.post('/register', async (req, res) => {
+router.post('/register', registerLimiter, async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    let { username, email, password } = req.body;
 
     if (!username || !email || !password) {
       return res.status(400).json({ error: 'Username, email, and password are required' });
     }
 
-    // Validate password length
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    // Sanitize inputs
+    username = sanitizeInput(username);
+    email = sanitizeInput(email).toLowerCase();
+
+    // Validate username
+    if (!validateUsername(username)) {
+      return res.status(400).json({ 
+        error: 'Username must be 3-30 characters and contain only letters, numbers, hyphens, and underscores' 
+      });
+    }
+
+    // Validate email
+    if (!validateEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address' });
+    }
+
+    // Validate password strength
+    if (!validatePassword(password)) {
+      return res.status(400).json({ 
+        error: 'Password must be at least 8 characters with uppercase, lowercase, and a number' 
+      });
     }
 
     // Check if username exists
@@ -54,13 +116,16 @@ router.post('/register', async (req, res) => {
 });
 
 // Login
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
-    const { username, password } = req.body;
+    let { username, password } = req.body;
 
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password are required' });
     }
+
+    // Sanitize username
+    username = sanitizeInput(username);
 
     const user = await User.findByUsername(username);
     if (!user) {
@@ -127,6 +192,22 @@ router.get('/users', require('../middleware/auth').authenticateToken, async (req
       console.error('Get users error:', error);
     }
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get online users
+router.get('/online', require('../middleware/auth').authenticateToken, async (req, res) => {
+  try {
+    const { getOnlineUsers } = require('../socket/handlers');
+    const onlineUsers = getOnlineUsers();
+    // Return empty array if no online users (instead of error)
+    res.json(onlineUsers || []);
+  } catch (error) {
+    if (process.env.NODE_ENV === 'development') {
+      console.error('Get online users error:', error);
+    }
+    // Return empty array instead of error to prevent frontend from hanging
+    res.json([]);
   }
 });
 

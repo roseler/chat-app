@@ -22,6 +22,9 @@ const authenticateSocket = (socket, next) => {
   });
 };
 
+// Track online users
+const onlineUsers = new Map(); // userId -> { username, socketId, lastSeen }
+
 const setupSocketHandlers = (io) => {
   io.use(authenticateSocket);
 
@@ -29,6 +32,26 @@ const setupSocketHandlers = (io) => {
     if (process.env.NODE_ENV === 'development') {
       console.log(`User connected: ${socket.username}`);
     }
+
+    // Track user as online
+    onlineUsers.set(socket.userId, {
+      username: socket.username,
+      socketId: socket.id,
+      lastSeen: new Date().toISOString()
+    });
+
+    // Notify all clients that user is online
+    io.emit('user_online', {
+      userId: socket.userId,
+      username: socket.username
+    });
+
+    // Send current online users to newly connected user
+    const onlineUsersList = Array.from(onlineUsers.entries()).map(([userId, data]) => ({
+      userId: parseInt(userId),
+      username: data.username
+    }));
+    socket.emit('online_users', onlineUsersList);
 
     // Join user's personal room
     const userRoom = `user_${socket.userId}`;
@@ -123,6 +146,14 @@ const setupSocketHandlers = (io) => {
     });
 
     socket.on('disconnect', () => {
+      // Remove user from online list
+      onlineUsers.delete(socket.userId);
+      
+      // Notify all clients that user is offline
+      io.emit('user_offline', {
+        userId: socket.userId
+      });
+
       if (process.env.NODE_ENV === 'development') {
         console.log(`User disconnected: ${socket.username}`);
       }
@@ -130,5 +161,13 @@ const setupSocketHandlers = (io) => {
   });
 };
 
-module.exports = { setupSocketHandlers };
+// Get online users (for API endpoint)
+const getOnlineUsers = () => {
+  return Array.from(onlineUsers.entries()).map(([userId, data]) => ({
+    userId: parseInt(userId),
+    username: data.username
+  }));
+};
+
+module.exports = { setupSocketHandlers, getOnlineUsers };
 
