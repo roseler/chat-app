@@ -9,6 +9,7 @@ const Chat = () => {
   const [selectedUser, setSelectedUser] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -57,18 +58,34 @@ const Chat = () => {
     navigate('/login');
   };
 
+  const handleUserSelect = (user) => {
+    setSelectedUser(user);
+    // Close sidebar on mobile after selecting user
+    if (window.innerWidth <= 768) {
+      setSidebarOpen(false);
+    }
+  };
+
   if (!currentUser) {
     return <div>Loading...</div>;
   }
 
   return (
     <div className="chat-container">
-      <div className="sidebar">
+      {/* Mobile menu overlay */}
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
+      
+      <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <h3>{currentUser.username}</h3>
-          <button className="logout-btn" onClick={handleLogout}>
-            Logout
-          </button>
+          <div className="sidebar-header-actions">
+            <button className="logout-btn" onClick={handleLogout}>
+              Logout
+            </button>
+            <button className="close-sidebar-btn" onClick={() => setSidebarOpen(false)}>
+              ✕
+            </button>
+          </div>
         </div>
         <div className="user-list">
           {loading ? (
@@ -80,7 +97,7 @@ const Chat = () => {
               <div
                 key={user.id}
                 className={`user-item ${selectedUser?.id === user.id ? 'active' : ''}`}
-                onClick={() => setSelectedUser(user)}
+                onClick={() => handleUserSelect(user)}
               >
                 <div className="user-item-name">{user.username}</div>
               </div>
@@ -88,7 +105,11 @@ const Chat = () => {
           )}
         </div>
       </div>
-      <ChatWindow selectedUser={selectedUser} currentUser={currentUser} />
+      <ChatWindow 
+        selectedUser={selectedUser} 
+        currentUser={currentUser}
+        onMenuClick={() => setSidebarOpen(true)}
+      />
     </div>
   );
 };

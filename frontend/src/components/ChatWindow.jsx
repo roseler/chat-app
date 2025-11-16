@@ -6,7 +6,7 @@ import { encryptMessage, decryptMessage, getSharedKey, storeSharedKey, generateK
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 
-const ChatWindow = ({ selectedUser, currentUser }) => {
+const ChatWindow = ({ selectedUser, currentUser, onMenuClick }) => {
   const [messages, setMessages] = useState([]);
   const [socket, setSocket] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -268,6 +268,11 @@ const ChatWindow = ({ selectedUser, currentUser }) => {
   return (
     <div className="chat-window">
       <div className="chat-header">
+        {onMenuClick && (
+          <button className="menu-toggle-btn" onClick={onMenuClick} aria-label="Open menu">
+            ☰
+          </button>
+        )}
         <h3>{selectedUser.username}</h3>
         {process.env.NODE_ENV === 'development' && (
           <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>
