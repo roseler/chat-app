@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
 const validator = require("validator");
 const User = require("../models/User");
 const {
@@ -11,6 +12,7 @@ const {
 
 // Rate limiting
 const loginLimiter = rateLimit({
+  keyGenerator: (req) => ipKeyGenerator(req.clientIp || req.ip),
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts per window
   message: {
@@ -22,6 +24,7 @@ const loginLimiter = rateLimit({
 });
 
 const registerLimiter = rateLimit({
+  keyGenerator: (req) => ipKeyGenerator(req.clientIp || req.ip),
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 3, // 3 registrations per hour
   message: { error: "Too many registrations. Please try again in an hour." },

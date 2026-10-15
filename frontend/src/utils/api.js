@@ -2,7 +2,9 @@ import axios from "axios";
 import { clearAuth } from "./auth";
 export const SOCKET_URL =
   import.meta.env.VITE_SOCKET_URL ||
-  `${window.location.protocol}//${window.location.hostname}:3001`;
+  (import.meta.env.DEV
+    ? `${window.location.protocol}//${window.location.hostname}:3001`
+    : window.location.origin);
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || `${SOCKET_URL}/api`,
   withCredentials: true,

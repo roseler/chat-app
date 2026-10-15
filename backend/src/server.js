@@ -7,6 +7,7 @@ const authRoutes = require("./routes/auth");
 const messageRoutes = require("./routes/messages");
 const { setupSocketHandlers } = require("./socket/handlers");
 const Message = require("./models/Message");
+const { isTrustedProxy, requireProxy } = require("./middleware/proxy");
 require("dotenv").config();
 
 const app = express();
@@ -16,9 +17,10 @@ const io = new Server(server, {
   allowRequest: (req, callback) =>
     callback(
       null,
-      !req.headers.origin ||
-        req.headers.origin ===
-          (process.env.FRONTEND_URL || "http://localhost:3000"),
+      isTrustedProxy(req.headers) &&
+        (!req.headers.origin ||
+          req.headers.origin ===
+            (process.env.FRONTEND_URL || "http://localhost:3000")),
     ),
   cors: {
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
@@ -29,10 +31,13 @@ const io = new Server(server, {
 
 app.set("io", io);
 app.disable("x-powered-by");
+// Render terminates HTTPS at its reverse proxy.
+if (process.env.RENDER === "true") app.set("trust proxy", 1);
 
 const PORT = process.env.PORT || 3001;
 
 // Middleware
+app.use(requireProxy);
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
@@ -113,9 +118,20 @@ async function startServer() {
 
 startServer();
 
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  console.log("\nShutting down server...");
-  await db.close();
-  process.exit(0);
-});
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const timeout = setTimeout(() => process.exit(1), 10000);
+  timeout.unref();
+  io.close();
+  server.close();
+  try {
+    await db.close();
+    process.exit(0);
+  } catch {
+    process.exit(1);
+  }
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

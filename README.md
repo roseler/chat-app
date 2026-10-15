@@ -19,6 +19,10 @@ The frontend uses Vite. File polling is enabled for Windows/WSL mounted folders.
 npm run build --prefix frontend
 ```
 
+## Deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the Cloudflare frontend/proxy and Render backend setup. The repository includes `wrangler.jsonc` and `render.yaml`.
+
 ## Features
 
 - Labeled login/registration forms, password visibility toggles, password requirements, confirmation, loading and error feedback.

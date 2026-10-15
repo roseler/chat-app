@@ -40,4 +40,8 @@ frontend/build/
 # Misc
 *.log
 .cache/
+.wrangler/
+.dev.vars
+.dev.vars.*
+wrangler.local.jsonc
 
