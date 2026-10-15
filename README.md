@@ -1,6 +1,6 @@
 # quiet.
 
-A responsive text chat app with a dark sage theme, live conversations, unread counts, typing indicators, timestamps, delivery/read receipts, and browser-side encryption.
+A responsive text chat app with a restrained charcoal theme, live conversations, unread counts, typing indicators, timestamps, delivery/read receipts, and browser-side encryption.
 
 ## Run locally
 

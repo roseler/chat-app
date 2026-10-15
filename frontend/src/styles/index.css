@@ -4,25 +4,22 @@
   box-sizing: border-box;
 }
 body {
-  font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
-  background: #111412;
-  color: #eef1e8;
+  background: #17181b;
+  color: #ececef;
 }
 #root {
   width: 100%;
   height: 100vh;
   height: 100dvh;
 }
-button {
+button,
+input,
+textarea {
   font-family: inherit;
 }
 ::selection {
-  background: #d2e5ad;
-  color: #202b1d;
+  background: #a9bff0;
+  color: #15181f;
 }

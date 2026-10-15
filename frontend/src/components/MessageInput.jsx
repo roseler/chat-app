@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import Icon from "./Icon";
 export default function MessageInput({
   onSend,
   socket,
@@ -87,11 +88,9 @@ export default function MessageInput({
             }
           }}
           placeholder={
-            disabled
-              ? "Write a draft while you wait…"
-              : `Message ${selectedUser.username}…`
+            disabled ? "Write a message…" : `Message ${selectedUser.username}…`
           }
-          rows={2}
+          rows={1}
           maxLength={4000}
           aria-describedby="composer-hint"
         />
@@ -100,13 +99,20 @@ export default function MessageInput({
           type="submit"
           disabled={disabled || sending || !message.trim()}
         >
-          {sending ? "Sending…" : "Send ↗"}
+          {sending ? (
+            "Sending…"
+          ) : (
+            <>
+              Send <Icon name="send" size={16} />
+            </>
+          )}
         </button>
       </form>
       <div className="composer-hint" id="composer-hint">
         <span>Enter to send · Shift + Enter for a new line</span>
         <span>
-          {message.length}/4000{message ? " · Draft saved in this tab" : ""}
+          {message ? "Draft saved" : ""}
+          {message.length > 3200 ? ` · ${message.length}/4000` : ""}
         </span>
       </div>
     </div>

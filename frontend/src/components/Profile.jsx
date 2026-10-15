@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import api, { errorText } from "../utils/api";
 import PasswordField from "./PasswordField";
+import Icon from "./Icon";
 export default function Profile({ user, onClose, onPasswordChanged }) {
   const [currentPassword, setCurrent] = useState("");
   const [newPassword, setNew] = useState("");
@@ -33,9 +34,9 @@ export default function Profile({ user, onClose, onPasswordChanged }) {
   return (
     <section className="profile-panel" aria-labelledby="profile-heading">
       <div className="panel-heading">
-        <h2 id="profile-heading">Your account</h2>
+        <h2 id="profile-heading">Account settings</h2>
         <button onClick={onClose} className="text-button">
-          Back to chat
+          <Icon name="back" size={16} /> Back to chat
         </button>
       </div>
       <div className="profile-details">
@@ -49,8 +50,8 @@ export default function Profile({ user, onClose, onPasswordChanged }) {
       <form className="auth-form profile-form" onSubmit={submit}>
         <h3>Change password</h3>
         <p className="muted">
-          Use 8+ characters with uppercase, lowercase, and a number. Maximum 72
-          bytes.
+          Use at least 8 characters, with an uppercase letter, a lowercase
+          letter, and a number.
         </p>
         <PasswordField
           id="current-password"
@@ -90,11 +91,10 @@ export default function Profile({ user, onClose, onPasswordChanged }) {
         </button>
       </form>
       <div className="privacy-note">
-        <h3>Your messaging key stays here</h3>
+        <h3>Message access</h3>
         <p>
-          Encrypted messaging is tied to this browser. Clearing site data
-          removes your private key. Other browsers cannot unlock your
-          conversations. Messages are removed from the server after 24 hours.
+          Messages can only be opened in this browser. Clearing site data
+          removes access to your conversations. History is kept for 24 hours.
         </p>
       </div>
     </section>

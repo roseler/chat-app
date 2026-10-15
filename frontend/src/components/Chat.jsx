@@ -6,6 +6,7 @@ import { getUser, clearAuth, setUser } from "../utils/auth";
 import { initializeIdentity } from "../utils/encryption";
 import ChatWindow from "./ChatWindow";
 import Profile from "./Profile";
+import Icon from "./Icon";
 export default function Chat() {
   const [currentUser, setCurrentUser] = useState(getUser);
   const [users, setUsers] = useState([]);
@@ -179,12 +180,7 @@ export default function Chat() {
         aria-label="Conversations"
       >
         <div className="sidebar-brand">
-          <span className="brand">
-            <span className="brand-mark" aria-hidden="true">
-              q
-            </span>
-            quiet<span className="brand-period">.</span>
-          </span>
+          <span className="brand">quiet</span>
           <button
             ref={closeButton}
             className="close-sidebar-btn text-button"
@@ -194,15 +190,16 @@ export default function Chat() {
             }}
             aria-label="Close conversations"
           >
-            ✕
+            <Icon name="close" />
           </button>
         </div>
         <div className="conversation-heading">
-          <h2>Conversations</h2>
+          <h2>People</h2>
           <span>{users.length}</span>
         </div>
         <label className="search-field">
           <span className="sr-only">Search people</span>
+          <Icon name="search" size={16} />
           <input
             type="search"
             placeholder="Search people…"
@@ -213,7 +210,7 @@ export default function Chat() {
         <nav className="user-list" aria-label="People">
           {loading ? (
             <p className="list-note" role="status">
-              Finding your people…
+              Loading people…
             </p>
           ) : filtered.length ? (
             filtered.map((user) => (
@@ -238,9 +235,7 @@ export default function Chat() {
                 <span className="user-copy">
                   <strong>{user.username}</strong>
                   <small>
-                    {online.includes(user.id)
-                      ? "Online now"
-                      : "Start a conversation"}
+                    {online.includes(user.id) ? "Online now" : "Offline"}
                   </small>
                 </span>
                 {unread[user.id] > 0 && (
@@ -256,8 +251,8 @@ export default function Chat() {
           ) : (
             <p className="list-note">
               {query
-                ? "No people match your search."
-                : "No one else is here yet. Invite someone to create an account."}
+                ? "No matching usernames."
+                : "No other accounts yet. Share the site with someone to start chatting."}
             </p>
           )}
         </nav>
@@ -274,14 +269,16 @@ export default function Chat() {
             </span>
             <span>
               <strong>{currentUser?.username}</strong>
-              <small>Your account & settings</small>
+              <small>Account settings</small>
             </span>
+            <Icon name="settings" size={17} />
           </button>
           <button
             className="text-button signout"
             onClick={logout}
             disabled={loggingOut}
           >
+            <Icon name="logout" size={16} />
             {loggingOut ? "Signing out…" : "Sign out"}
           </button>
         </div>

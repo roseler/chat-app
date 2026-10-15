@@ -19,14 +19,13 @@ export default function MessageList({
     >
       {loading && (
         <p className="list-note" role="status">
-          Loading your conversation…
+          Loading messages…
         </p>
       )}
       {!loading && !messages.length && (
         <div className="empty-chat">
-          <span className="eyebrow">THE START OF SOMETHING</span>
-          <h2>Say the first hello.</h2>
-          <p>No messages here yet. A good conversation starts with you.</p>
+          <h2>No messages yet</h2>
+          <p>Send a message to start this conversation.</p>
         </div>
       )}
       {messages.map((message, index) => {

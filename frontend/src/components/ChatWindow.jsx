@@ -7,6 +7,7 @@ import {
 } from "../utils/encryption";
 import MessageList from "./MessageList";
 import MessageInput from "./MessageInput";
+import Icon from "./Icon";
 export default function ChatWindow({
   selectedUser,
   currentUser,
@@ -220,7 +221,7 @@ export default function ChatWindow({
           onClick={onMenuClick}
           aria-label="Open conversations"
         >
-          ☰
+          <Icon name="menu" size={20} />
         </button>
         {selectedUser ? (
           <>
@@ -233,26 +234,21 @@ export default function ChatWindow({
                 {typing ? "Typing…" : online ? "Online now" : "Offline"}
               </span>
             </div>
-            <span className="chat-label">24h history</span>
+            <span className="chat-label" title="Messages are kept for 24 hours">
+              24-hour history
+            </span>
           </>
         ) : (
-          <h1>Your conversations</h1>
+          <h1>Messages</h1>
         )}
       </header>
       {!selectedUser ? (
         <div className="welcome-chat">
-          <span className="welcome-symbol" aria-hidden="true">
-            ↗
-          </span>
-          <span className="eyebrow">A CONVERSATION AWAY</span>
-          <h2>A little hello goes a long way.</h2>
-          <p>
-            Choose someone to start a conversation.
-            <br />
-            Make their day a little less quiet.
-          </p>
+          <Icon name="message" size={30} />
+          <h2>No conversation selected</h2>
+          <p>Choose someone from the list to start a message.</p>
           <button className="primary-button mobile-only" onClick={onMenuClick}>
-            Find your people
+            Browse people
           </button>
         </div>
       ) : (
@@ -286,9 +282,6 @@ export default function ChatWindow({
             selectedUser={selectedUser}
             disabled={!connected || !keyReady || !selectedUser.public_key}
           />
-          <p className="conversation-footnote">
-            Conversation history is available for 24 hours.
-          </p>
         </>
       )}
     </section>
