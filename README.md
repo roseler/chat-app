@@ -70,7 +70,7 @@ VITE_SOCKET_URL=http://localhost:3001
 
 By default, the frontend uses its current hostname with API port 3001. Set the URLs explicitly when deploying. Cookies require the frontend and backend to share a site. In production, use HTTPS and `NODE_ENV=production` for Secure cookies; configure the exact frontend origin. The app uses HttpOnly, SameSite=Strict cookies with hashed, revocable server-side sessions. It no longer uses JWT_SECRET or stores authentication tokens in localStorage.
 
-The active deployment runs entirely on Cloudflare; its SQLite database is managed by a Durable Object. The optional Node backend requires a persistent server and SQLite volume if hosted separately. `vercel.json` disables Vercel Git deployments on all branches; Cloudflare remains the active host. To remove the integration completely, disconnect this repository in the Vercel project under Settings → Git → Connected Git Repository → Disconnect.
+The active deployment runs entirely on Cloudflare; its SQLite database is managed by a Durable Object. The optional Node backend requires a persistent server and SQLite volume if hosted separately.
 
 ## Verification
 
