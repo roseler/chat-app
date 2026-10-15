@@ -1,99 +1,114 @@
-import React, { useState, useEffect, useRef } from 'react';
-
-const MessageInput = ({ onSend, socket, selectedUser }) => {
-  const [message, setMessage] = useState('');
-  const typingTimeoutRef = useRef(null);
-  const lastTypingTimeRef = useRef(0);
-
-  useEffect(() => {
-    return () => {
-      // Stop typing when component unmounts
-      if (socket && selectedUser && typingTimeoutRef.current) {
-        socket.emit('stop_typing', { receiverId: selectedUser.id });
-        clearTimeout(typingTimeoutRef.current);
-      }
-    };
-  }, [socket, selectedUser]);
-
-  const handleChange = (e) => {
+import React, { useEffect, useRef, useState } from "react";
+export default function MessageInput({
+  onSend,
+  socket,
+  selectedUser,
+  draftKey,
+  disabled,
+}) {
+  const [message, setMessage] = useState(
+    () => sessionStorage.getItem(draftKey) || "",
+  );
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const timer = useRef(null);
+  const lastTyping = useRef(0);
+  const textRef = useRef(message);
+  textRef.current = message;
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      if (socket?.connected)
+        socket.emit("stop_typing", { receiverId: selectedUser.id });
+    },
+    [socket, selectedUser.id],
+  );
+  function change(e) {
     const value = e.target.value;
     setMessage(value);
-
-    // Emit typing indicator
-    if (socket && selectedUser && value.trim()) {
-      const now = Date.now();
-      // Throttle typing events (max once per 2 seconds)
-      if (now - lastTypingTimeRef.current > 2000) {
-        socket.emit('typing', { receiverId: selectedUser.id });
-        lastTypingTimeRef.current = now;
+    sessionStorage.setItem(draftKey, value);
+    if (socket?.connected) {
+      if (value.trim() && Date.now() - lastTyping.current > 1500) {
+        socket.emit("typing", { receiverId: selectedUser.id });
+        lastTyping.current = Date.now();
       }
-
-      // Clear existing timeout
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-
-      // Stop typing after 3 seconds of inactivity
-      typingTimeoutRef.current = setTimeout(() => {
-        if (socket && selectedUser) {
-          socket.emit('stop_typing', { receiverId: selectedUser.id });
-        }
-      }, 3000);
-    } else if (socket && selectedUser && !value.trim()) {
-      // Stop typing if message is empty
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      socket.emit('stop_typing', { receiverId: selectedUser.id });
+      clearTimeout(timer.current);
+      timer.current = setTimeout(
+        () => socket.emit("stop_typing", { receiverId: selectedUser.id }),
+        2500,
+      );
+      if (!value.trim())
+        socket.emit("stop_typing", { receiverId: selectedUser.id });
     }
-  };
-
-  const handleSubmit = (e) => {
+  }
+  async function submit(e) {
     e.preventDefault();
-    if (message.trim()) {
-      // Stop typing indicator
-      if (socket && selectedUser) {
-        socket.emit('stop_typing', { receiverId: selectedUser.id });
-        if (typingTimeoutRef.current) {
-          clearTimeout(typingTimeoutRef.current);
-        }
+    if (!message.trim() || sending || disabled) return;
+    const sentText = message;
+    setSending(true);
+    setError("");
+    try {
+      await onSend(sentText.trim());
+      if (textRef.current === sentText) {
+        setMessage("");
+        sessionStorage.removeItem(draftKey);
       }
-      onSend(message);
-      setMessage('');
+      socket?.emit("stop_typing", { receiverId: selectedUser.id });
+    } catch (err) {
+      setError(err.message || "Could not send. Your draft is saved.");
+    } finally {
+      setSending(false);
     }
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit(e);
-    }
-  };
-
+  }
   return (
     <div className="message-input-container">
-      <form className="message-input-form" onSubmit={handleSubmit}>
+      {error && (
+        <p className="notice error" role="alert">
+          {error}
+        </p>
+      )}
+      <form className="message-input-form" onSubmit={submit}>
+        <label className="sr-only" htmlFor="message">
+          Message {selectedUser.username}
+        </label>
         <textarea
+          id="message"
           className="message-input"
           value={message}
-          onChange={handleChange}
-          onKeyPress={handleKeyPress}
-          placeholder="Type a message..."
-          rows={1}
-          style={{
-            minHeight: '44px',
-            maxHeight: '120px',
-            height: 'auto',
-            overflowY: 'auto'
+          onChange={change}
+          onKeyDown={(e) => {
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing
+            ) {
+              e.preventDefault();
+              submit(e);
+            }
           }}
+          placeholder={
+            disabled
+              ? "Write a draft while you wait…"
+              : `Message ${selectedUser.username}…`
+          }
+          rows={2}
+          maxLength={4000}
+          aria-describedby="composer-hint"
         />
-        <button type="submit" className="send-button" disabled={!message.trim()}>
-          Send
+        <button
+          className="send-button"
+          type="submit"
+          disabled={disabled || sending || !message.trim()}
+        >
+          {sending ? "Sending…" : "Send ↗"}
         </button>
       </form>
+      <div className="composer-hint" id="composer-hint">
+        <span>Enter to send · Shift + Enter for a new line</span>
+        <span>
+          {message.length}/4000{message ? " · Draft saved in this tab" : ""}
+        </span>
+      </div>
     </div>
   );
-};
-
-export default MessageInput;
-
+}

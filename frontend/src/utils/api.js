@@ -1,35 +1,32 @@
-import axios from 'axios';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
-
+import axios from "axios";
+import { clearAuth } from "./auth";
+export const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL ||
+  `${window.location.protocol}//${window.location.hostname}:3001`;
 const api = axios.create({
-  baseURL: API_URL,
-  headers: {
-    'Content-Type': 'application/json'
-  }
+  baseURL: import.meta.env.VITE_API_URL || `${SOCKET_URL}/api`,
+  withCredentials: true,
+  timeout: 15000,
 });
-
-// Add token to requests
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Handle token expiration
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 || error.response?.status === 403) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+    if (
+      error.response?.status === 401 &&
+      !/\/(login|register)$/.test(error.config?.url || "")
+    ) {
+      clearAuth();
+      window.location.assign("/login");
     }
     return Promise.reject(error);
-  }
+  },
 );
-
+export const errorText = (
+  error,
+  fallback = "Unable to connect. Please try again.",
+) =>
+  error.response?.data?.error ||
+  (error.code === "ECONNABORTED"
+    ? "The request timed out. Please try again."
+    : fallback);
 export default api;
-

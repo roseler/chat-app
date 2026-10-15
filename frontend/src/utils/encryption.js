@@ -1,140 +1,108 @@
-import CryptoJS from 'crypto-js';
-
-// Generate a random key for AES encryption
-export const generateKey = () => {
-  return CryptoJS.lib.WordArray.random(256/8).toString();
-};
-
-// Encrypt message using AES
-export const encryptMessage = (message, key) => {
-  try {
-    // Ensure key is in the right format (WordArray or string)
-    // If key is a hex string from SHA256, convert it properly
-    let keyWordArray;
-    if (typeof key === 'string' && key.length === 64) {
-      // It's a hex string (SHA256 produces 64 char hex)
-      keyWordArray = CryptoJS.enc.Hex.parse(key);
-    } else {
-      // Use as-is (CryptoJS will handle it)
-      keyWordArray = key;
-    }
-    
-    const iv = CryptoJS.lib.WordArray.random(128/8);
-    const encrypted = CryptoJS.AES.encrypt(message, keyWordArray, {
-      iv: iv,
-      mode: CryptoJS.mode.CBC,
-      padding: CryptoJS.pad.Pkcs7
+import api from "./api";
+let database;
+function openDatabase() {
+  if (!database)
+    database = new Promise((resolve, reject) => {
+      const request = indexedDB.open("chat-identity", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("keys");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        reject(new Error("Allow browser storage to enable messaging."));
     });
-    
-    return {
-      encryptedContent: encrypted.ciphertext.toString(CryptoJS.enc.Base64),
-      iv: iv.toString(CryptoJS.enc.Base64)
-    };
-  } catch (error) {
-    if (process.env.NODE_ENV === 'development') {
-      console.error('Encryption error:', error);
-    }
-    throw error;
-  }
-};
-
-// Decrypt message using AES
-export const decryptMessage = (encryptedContent, iv, key) => {
-  try {
-    // Ensure key is in the right format
-    let keyWordArray;
-    if (typeof key === 'string' && key.length === 64) {
-      // It's a hex string (SHA256 produces 64 char hex)
-      keyWordArray = CryptoJS.enc.Hex.parse(key);
-    } else {
-      // Use as-is
-      keyWordArray = key;
-    }
-    
-    const encrypted = CryptoJS.lib.CipherParams.create({
-      ciphertext: CryptoJS.enc.Base64.parse(encryptedContent)
-    });
-    
-    const decrypted = CryptoJS.AES.decrypt(encrypted, keyWordArray, {
-      iv: CryptoJS.enc.Base64.parse(iv),
-      mode: CryptoJS.mode.CBC,
-      padding: CryptoJS.pad.Pkcs7
-    });
-    
-    const decryptedText = decrypted.toString(CryptoJS.enc.Utf8);
-    
-    // Check if decryption was successful (empty string usually means wrong key)
-    if (!decryptedText || decryptedText.length === 0) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Decryption failed - wrong key or corrupted data');
+  return database;
+}
+async function storedKey(id, value) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(
+      "keys",
+      value ? "readwrite" : "readonly",
+    );
+    const store = transaction.objectStore("keys");
+    let result;
+    const request = store.get(String(id));
+    request.onsuccess = () => {
+      result = request.result;
+      if (!result && value) {
+        result = value;
+        store.add(value, String(id));
       }
-      return null;
-    }
-    
-    return decryptedText;
-  } catch (error) {
-    if (process.env.NODE_ENV === 'development') {
-      console.error('Decryption error:', error);
-    }
-    return null;
-  }
-};
-
-// Derive shared key from two keys (simple XOR for demo, use proper key exchange in production)
-export const deriveSharedKey = (key1, key2) => {
-  // In production, use proper key exchange like Diffie-Hellman
-  // For simplicity, we'll use a combination approach
-  const combined = key1 + key2;
-  return CryptoJS.SHA256(combined).toString();
-};
-
-// Store encryption keys in localStorage (in production, use more secure storage)
-export const storeUserKey = (userId, key) => {
-  localStorage.setItem(`encryption_key_${userId}`, key);
-};
-
-export const getUserKey = (userId) => {
-  return localStorage.getItem(`encryption_key_${userId}`);
-};
-
-// Key exchange: Store shared keys between users
-export const storeSharedKey = (userId1, userId2, key) => {
-  const keyId = userId1 < userId2 ? `${userId1}_${userId2}` : `${userId2}_${userId1}`;
-  localStorage.setItem(`shared_key_${keyId}`, key);
-};
-
-export const getSharedKey = (userId1, userId2) => {
-  // Normalize IDs to numbers to ensure consistent key generation
-  const id1 = parseInt(userId1);
-  const id2 = parseInt(userId2);
-  
-  // Sort IDs to ensure consistent key generation regardless of parameter order
-  const sortedIds = [id1, id2].sort((a, b) => a - b);
-  
-  // Create consistent key ID (always smaller ID first)
-  const keyId = `${sortedIds[0]}_${sortedIds[1]}`;
-  let key = localStorage.getItem(`shared_key_${keyId}`);
-  
-  // Always regenerate the key deterministically to ensure both users have the same key
-  // This fixes the issue where old keys might be stored with different formats
-  const keySeed = `${sortedIds[0]}_${sortedIds[1]}_chat_key`;
-  
-  // Generate SHA256 hash and convert to hex string (64 characters)
-  const hash = CryptoJS.SHA256(keySeed);
-  const generatedKey = hash.toString(CryptoJS.enc.Hex);
-  
-  // If stored key exists but is different, replace it
-  if (key && key !== generatedKey) {
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('Stored key differs from generated key. Replacing with correct key.');
-    }
-  }
-  
-  // Always use the deterministically generated key (not the stored one)
-  // This ensures both users always have the same key
-  key = generatedKey;
-  storeSharedKey(sortedIds[0], sortedIds[1], key);
-  
-  return key;
-};
-
+    };
+    transaction.oncomplete = () => resolve(result);
+    transaction.onerror = () =>
+      reject(new Error("Unable to save your messaging key."));
+  });
+}
+const identities = new Map();
+export function initializeIdentity(userId) {
+  if (!identities.has(userId))
+    identities.set(
+      userId,
+      (async () => {
+        if (!window.crypto?.subtle)
+          throw new Error("Messaging requires HTTPS or localhost.");
+        let pair = await storedKey(userId);
+        if (!pair) {
+          // Non-exportable private key; the public half remains exportable.
+          pair = await crypto.subtle.generateKey(
+            { name: "ECDH", namedCurve: "P-256" },
+            false,
+            ["deriveBits"],
+          );
+          pair = await storedKey(userId, pair);
+        }
+        const publicKey = await crypto.subtle.exportKey("jwk", pair.publicKey);
+        await api.put("/auth/public-key", { publicKey });
+        return pair;
+      })().catch((error) => {
+        identities.delete(userId);
+        throw error;
+      }),
+    );
+  return identities.get(userId);
+}
+export async function getSharedKey(userId, otherUser) {
+  if (!otherUser?.public_key)
+    throw new Error(
+      "This person needs to sign in before you can send encrypted messages.",
+    );
+  const pinned = await storedKey(`peer:${userId}:${otherUser.id}`, {
+    publicKey: otherUser.public_key,
+  });
+  if (pinned.publicKey !== otherUser.public_key)
+    throw new Error(
+      "This person’s messaging key changed. Sending is paused to protect your conversation.",
+    );
+  const pair = await initializeIdentity(userId);
+  const publicKey = await crypto.subtle.importKey(
+    "jwk",
+    JSON.parse(otherUser.public_key),
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    [],
+  );
+  const secret = await crypto.subtle.deriveBits(
+    { name: "ECDH", public: publicKey },
+    pair.privateKey,
+    256,
+  );
+  const material = await crypto.subtle.importKey("raw", secret, "HKDF", false, [
+    "deriveKey",
+  ]);
+  const ids = [Number(userId), Number(otherUser.id)]
+    .sort((a, b) => a - b)
+    .join(":");
+  return crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: new Uint8Array(32),
+      info: new TextEncoder().encode(`quiet-chat:v2:${ids}`),
+    },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+export { encryptMessage, decryptMessage } from "./cipher.mjs";

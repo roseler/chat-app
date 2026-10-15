@@ -1,8 +1,9 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
-require('dotenv').config();
+const sqlite3 = require("sqlite3").verbose();
+const path = require("path");
+require("dotenv").config();
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../database.sqlite');
+const DB_PATH =
+  process.env.DB_PATH || path.join(__dirname, "../../database.sqlite");
 
 class Database {
   constructor() {
@@ -13,20 +14,23 @@ class Database {
     return new Promise((resolve, reject) => {
       this.db = new sqlite3.Database(DB_PATH, (err) => {
         if (err) {
-          console.error('Error opening database:', err);
+          console.error("Error opening database:", err);
           reject(err);
         } else {
-          console.log('Connected to SQLite database');
-          this.initTables().then(resolve).catch(reject);
+          console.log("Connected to SQLite database");
+          this.db.run("PRAGMA foreign_keys = ON", (error) => {
+            if (error) reject(error);
+            else this.initTables().then(resolve).catch(reject);
+          });
         }
       });
     });
   }
 
-initTables() {
-  return new Promise((resolve, reject) => {
-    const queries = [
-      `CREATE TABLE IF NOT EXISTS users (
+  initTables() {
+    return new Promise((resolve, reject) => {
+      const queries = [
+        `CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         email TEXT UNIQUE NOT NULL,
@@ -34,7 +38,7 @@ initTables() {
         public_key TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`,
-      `CREATE TABLE IF NOT EXISTS messages (
+        `CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sender_id INTEGER NOT NULL,
         receiver_id INTEGER NOT NULL,
@@ -45,36 +49,36 @@ initTables() {
         FOREIGN KEY (sender_id) REFERENCES users(id),
         FOREIGN KEY (receiver_id) REFERENCES users(id)
       )`,
-      `CREATE TABLE IF NOT EXISTS sessions (
+        `CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         token TEXT UNIQUE NOT NULL,
         expires_at DATETIME NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id)
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)`
-    ];
+        `CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)`,
+      ];
 
-    this.db.serialize(() => {
-      for (const query of queries) {
-        this.db.run(query, (err) => {
-          if (err) {
-            console.error('Error creating table/index:', err);
-            reject(err);
-          }
+      this.db.serialize(() => {
+        for (const query of queries) {
+          this.db.run(query, (err) => {
+            if (err) {
+              console.error("Error creating table/index:", err);
+              reject(err);
+            }
+          });
+        }
+
+        this.db.get("SELECT 1", (err) => {
+          if (err) reject(err);
+          else resolve();
         });
-      }
-
-      this.db.get('SELECT 1', (err) => {
-        if (err) reject(err);
-        else resolve();
       });
     });
-  });
-}
-  
+  }
+
   query(sql, params = []) {
     return new Promise((resolve, reject) => {
       this.db.all(sql, params, (err, rows) => {
@@ -101,7 +105,7 @@ initTables() {
 
   run(sql, params = []) {
     return new Promise((resolve, reject) => {
-      this.db.run(sql, params, function(err) {
+      this.db.run(sql, params, function (err) {
         if (err) {
           reject(err);
         } else {
@@ -118,7 +122,7 @@ initTables() {
           if (err) {
             reject(err);
           } else {
-            console.log('Database connection closed');
+            console.log("Database connection closed");
             resolve();
           }
         });
@@ -131,4 +135,3 @@ initTables() {
 
 const db = new Database();
 module.exports = db;
-

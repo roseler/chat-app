@@ -1,191 +1,361 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import api from '../utils/api';
-import { getUser, clearAuth } from '../utils/auth';
-import ChatWindow from './ChatWindow';
-
-const Chat = () => {
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { io } from "socket.io-client";
+import api, { errorText, SOCKET_URL } from "../utils/api";
+import { getUser, clearAuth, setUser } from "../utils/auth";
+import { initializeIdentity } from "../utils/encryption";
+import ChatWindow from "./ChatWindow";
+import Profile from "./Profile";
+export default function Chat() {
+  const [currentUser, setCurrentUser] = useState(getUser);
   const [users, setUsers] = useState([]);
-  const [selectedUser, setSelectedUser] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState(null);
+  const [online, setOnline] = useState([]);
+  const [unread, setUnread] = useState({});
+  const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [onlineUsers, setOnlineUsers] = useState(new Set());
-  const [unreadCounts, setUnreadCounts] = useState({});
+  const [profile, setProfile] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [keyError, setKeyError] = useState("");
+  const [socket, setSocket] = useState(null);
+  const [status, setStatus] = useState("connecting");
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [keyReady, setKeyReady] = useState(false);
+  const socketRef = useRef(null);
+  const menuButton = useRef(null);
+  const closeButton = useRef(null);
+  const sidebarRef = useRef(null);
   const navigate = useNavigate();
-
-  // Initial load
-  useEffect(() => {
-    const initialize = async () => {
-      await loadCurrentUser();
-      await loadUsers();
-    };
-    
-    initialize();
-  }, []); // Only run once on mount
-
-  // Load unread counts when currentUser is available
-  useEffect(() => {
-    if (!currentUser) return;
-    
-    loadUnreadCounts();
-    
-    // Refresh unread counts periodically
-    const interval = setInterval(loadUnreadCounts, 30000); // Every 30 seconds
-    
-    return () => clearInterval(interval);
-  }, [currentUser]);
-
-  const loadCurrentUser = async () => {
+  const refreshUnread = useCallback(async () => {
     try {
-      const user = getUser();
-      if (!user) {
-        navigate('/login');
-        return;
-      }
-      setCurrentUser(user);
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Error loading user:', error);
-      }
-      navigate('/login');
+      const { data } = await api.get("/messages/unread");
+      setUnread(
+        Object.fromEntries(data.bySender.map((row) => [row.userId, row.count])),
+      );
+    } catch {
+      /* Reconnect retries the unread request. */
     }
-  };
-
-  const loadUsers = async () => {
-    try {
-      setLoading(true);
-      const response = await api.get('/auth/users');
-      const usersData = response.data;
-      
-      // Load online users (with timeout to prevent hanging)
+  }, []);
+  const refreshUsers = useCallback(async () => {
+    const { data } = await api.get("/auth/users");
+    setUsers(data);
+  }, []);
+  useEffect(() => {
+    let active = true;
+    async function initialize() {
       try {
-        const onlineResponse = await Promise.race([
-          api.get('/auth/online'),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Timeout')), 5000)
-          )
-        ]);
-        const onlineUserIds = new Set(onlineResponse.data.map(u => u.userId));
-        setOnlineUsers(onlineUserIds);
-        
-        // Mark users as online
-        usersData.forEach(user => {
-          user.isOnline = onlineUserIds.has(user.id);
-        });
-      } catch (err) {
-        // If online endpoint fails, continue without online status
-        // This is not critical, so we just skip it
-        if (process.env.NODE_ENV === 'development') {
-          console.warn('Could not load online users (this is okay):', err.message);
+        const { data } = await api.get("/auth/me");
+        if (!active) return;
+        setCurrentUser(data);
+        setUser(data);
+        try {
+          await initializeIdentity(data.id);
+          if (active) setKeyReady(true);
+        } catch (err) {
+          if (active) setKeyError(errorText(err, err.message));
         }
-        // Mark all users as offline if we can't determine status
-        usersData.forEach(user => {
-          user.isOnline = false;
-        });
+        await refreshUsers();
+        await refreshUnread();
+      } catch (err) {
+        if (active) setError(errorText(err));
+      } finally {
+        if (active) setLoading(false);
       }
-      
-      setUsers(usersData);
-      if (usersData.length > 0 && !selectedUser) {
-        setSelectedUser(usersData[0]);
-      }
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Error loading users:', error);
-      }
-      if (error.response?.status === 401 || error.response?.status === 403) {
-        navigate('/login');
-      } else {
-        // Show error but don't block the UI
-        setUsers([]);
-      }
-    } finally {
-      setLoading(false);
     }
-  };
-
-  const loadUnreadCounts = async () => {
-    if (!currentUser) return;
-    
+    initialize();
+    const timer = setInterval(() => {
+      refreshUsers().catch(() => {});
+      refreshUnread();
+    }, 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [refreshUsers, refreshUnread]);
+  useEffect(() => {
+    const connection = io(SOCKET_URL, {
+      withCredentials: true,
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
+    });
+    socketRef.current = connection;
+    setSocket(connection);
+    const connected = () => {
+      setStatus("connected");
+      refreshUsers().catch(() => {});
+      refreshUnread();
+    };
+    connection.on("connect", connected);
+    connection.on("disconnect", () =>
+      setStatus(navigator.onLine ? "reconnecting" : "offline"),
+    );
+    connection.on("connect_error", (error) =>
+      setStatus(
+        error.message === "Please sign in again."
+          ? "session"
+          : navigator.onLine
+            ? "reconnecting"
+            : "offline",
+      ),
+    );
+    connection.on("online_users", (list) =>
+      setOnline(list.map((user) => user.userId)),
+    );
+    connection.on("receive_message", (message) => {
+      if (message.receiverId === currentUser?.id)
+        connection.emit("message_delivered", { id: message.id });
+      refreshUnread();
+    });
+    connection.on("unread_changed", refreshUnread);
+    const offline = () => setStatus("offline");
+    const reconnect = () => {
+      setStatus("reconnecting");
+      connection.connect();
+    };
+    window.addEventListener("offline", offline);
+    window.addEventListener("online", reconnect);
+    return () => {
+      connection.disconnect();
+      socketRef.current = null;
+      window.removeEventListener("offline", offline);
+      window.removeEventListener("online", reconnect);
+    };
+  }, [currentUser?.id, refreshUnread, refreshUsers]);
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    closeButton.current?.focus();
+    const keydown = (event) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+        menuButton.current?.focus();
+      }
+      if (event.key === "Tab" && window.innerWidth <= 768) {
+        const items = sidebarRef.current?.querySelectorAll("button, input");
+        const first = items?.[0],
+          last = items?.[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [sidebarOpen]);
+  async function logout() {
+    setLoggingOut(true);
+    setError("");
     try {
-      const response = await api.get('/messages/unread');
-      // For now, we'll show total unread. Later can be per-user
-      // This would require a different endpoint
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Error loading unread counts:', error);
-      }
+      await api.post("/auth/logout");
+      socketRef.current?.disconnect();
+      clearAuth();
+      Object.keys(sessionStorage)
+        .filter((k) => k.startsWith("draft:"))
+        .forEach((k) => sessionStorage.removeItem(k));
+      navigate("/login");
+    } catch (err) {
+      setError(errorText(err));
+      setLoggingOut(false);
     }
-  };
-
-  const handleLogout = () => {
-    clearAuth();
-    navigate('/login');
-  };
-
-  const handleUserSelect = (user) => {
-    setSelectedUser(user);
-    // Close sidebar on mobile after selecting user
-    if (window.innerWidth <= 768) {
-      setSidebarOpen(false);
-    }
-  };
-
-  if (!currentUser) {
-    return <div>Loading...</div>;
   }
-
+  const selectedUser = users.find((user) => user.id === selectedId);
+  const filtered = users.filter((user) =>
+    user.username.toLowerCase().includes(query.toLowerCase()),
+  );
+  const openMenu = () => setSidebarOpen(true);
   return (
-    <div className="chat-container">
-      {/* Mobile menu overlay */}
-      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
-      
-      <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div className="sidebar-header">
-          <h3>{currentUser.username}</h3>
-          <div className="sidebar-header-actions">
-            <button className="logout-btn" onClick={handleLogout}>
-              Logout
-            </button>
-            <button className="close-sidebar-btn" onClick={() => setSidebarOpen(false)}>
-              ✕
+    <main className="chat-container">
+      {sidebarOpen && (
+        <button
+          className="sidebar-overlay"
+          aria-label="Close conversations"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      <aside
+        ref={sidebarRef}
+        className={`sidebar ${sidebarOpen ? "open" : ""}`}
+        aria-label="Conversations"
+      >
+        <div className="sidebar-brand">
+          <span className="brand">
+            <span className="brand-mark" aria-hidden="true">
+              q
+            </span>
+            quiet<span className="brand-period">.</span>
+          </span>
+          <button
+            ref={closeButton}
+            className="close-sidebar-btn text-button"
+            onClick={() => {
+              setSidebarOpen(false);
+              menuButton.current?.focus();
+            }}
+            aria-label="Close conversations"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="conversation-heading">
+          <h2>Conversations</h2>
+          <span>{users.length}</span>
+        </div>
+        <label className="search-field">
+          <span className="sr-only">Search people</span>
+          <input
+            type="search"
+            placeholder="Search people…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+        <nav className="user-list" aria-label="People">
+          {loading ? (
+            <p className="list-note" role="status">
+              Finding your people…
+            </p>
+          ) : filtered.length ? (
+            filtered.map((user) => (
+              <button
+                key={user.id}
+                className={`user-item ${user.id === selectedId && !profile ? "active" : ""}`}
+                aria-current={
+                  user.id === selectedId && !profile ? "true" : undefined
+                }
+                onClick={() => {
+                  setSelectedId(user.id);
+                  setProfile(false);
+                  setSidebarOpen(false);
+                }}
+              >
+                <span className="avatar">
+                  {user.username.slice(0, 1).toUpperCase()}
+                  <span
+                    className={`presence ${online.includes(user.id) ? "online" : ""}`}
+                  />
+                </span>
+                <span className="user-copy">
+                  <strong>{user.username}</strong>
+                  <small>
+                    {online.includes(user.id)
+                      ? "Online now"
+                      : "Start a conversation"}
+                  </small>
+                </span>
+                {unread[user.id] > 0 && (
+                  <span
+                    className="unread-badge"
+                    aria-label={`${unread[user.id]} unread messages`}
+                  >
+                    {unread[user.id]}
+                  </span>
+                )}
+              </button>
+            ))
+          ) : (
+            <p className="list-note">
+              {query
+                ? "No people match your search."
+                : "No one else is here yet. Invite someone to create an account."}
+            </p>
+          )}
+        </nav>
+        <div className="sidebar-account">
+          <button
+            className="account-button"
+            onClick={() => {
+              setProfile(true);
+              setSidebarOpen(false);
+            }}
+          >
+            <span className="avatar self">
+              {currentUser?.username?.slice(0, 1).toUpperCase()}
+            </span>
+            <span>
+              <strong>{currentUser?.username}</strong>
+              <small>Your account & settings</small>
+            </span>
+          </button>
+          <button
+            className="text-button signout"
+            onClick={logout}
+            disabled={loggingOut}
+          >
+            {loggingOut ? "Signing out…" : "Sign out"}
+          </button>
+        </div>
+      </aside>
+      <div className="workspace">
+        {status !== "connected" && (
+          <div className="connection-banner" role="status">
+            {status === "offline"
+              ? "You’re offline. Your draft stays here until you reconnect."
+              : status === "session"
+                ? "Your session ended. Please sign in again."
+                : "Connecting to your conversations…"}
+            <button
+              className="text-button"
+              onClick={() =>
+                status === "session"
+                  ? (clearAuth(), navigate("/login"))
+                  : socket?.connect()
+              }
+            >
+              {status === "session" ? "Sign in" : "Reconnect"}
             </button>
           </div>
-        </div>
-        <div className="user-list">
-          {loading ? (
-            <div style={{ padding: '20px', color: '#666' }}>Loading users...</div>
-          ) : users.length === 0 ? (
-            <div style={{ padding: '20px', color: '#666' }}>No other users found</div>
-          ) : (
-            users.map((user) => (
-              <div
-                key={user.id}
-                className={`user-item ${selectedUser?.id === user.id ? 'active' : ''}`}
-                onClick={() => handleUserSelect(user)}
-              >
-                <div className="user-item-content">
-                  <div className="user-item-name">
-                    {user.username}
-                    {user.isOnline && <span className="online-dot" title="Online">●</span>}
-                  </div>
-                  {unreadCounts[user.id] > 0 && (
-                    <span className="unread-badge">{unreadCounts[user.id]}</span>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+        )}
+        {error && (
+          <div className="notice error" role="alert">
+            {error}
+            <button
+              className="text-button"
+              onClick={() => {
+                setError("");
+                setLoading(true);
+                refreshUsers()
+                  .catch((err) => setError(errorText(err)))
+                  .finally(() => setLoading(false));
+              }}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+        {keyError && (
+          <div className="notice error" role="alert">
+            {keyError}
+          </div>
+        )}
+        {profile ? (
+          <Profile
+            user={currentUser}
+            onClose={() => setProfile(false)}
+            onPasswordChanged={() => {
+              socket?.disconnect();
+              socket?.connect();
+            }}
+          />
+        ) : (
+          <ChatWindow
+            key={selectedUser?.id || "empty"}
+            selectedUser={selectedUser}
+            currentUser={currentUser}
+            socket={socket}
+            connected={status === "connected"}
+            keyReady={keyReady}
+            online={online.includes(selectedId)}
+            onMenuClick={openMenu}
+            menuButtonRef={menuButton}
+            onRead={refreshUnread}
+          />
+        )}
       </div>
-      <ChatWindow 
-        selectedUser={selectedUser} 
-        currentUser={currentUser}
-        onMenuClick={() => setSidebarOpen(true)}
-      />
-    </div>
+    </main>
   );
-};
-
-export default Chat;
-
+}

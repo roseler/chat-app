@@ -5,22 +5,25 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "init-db": "node src/utils/initDatabase.js"
+    "dev": "node --watch src/server.js",
+    "init-db": "node src/utils/initDatabase.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "bcrypt": "^5.1.1",
-    "cors": "^2.8.5",
-    "dompurify": "^3.3.0",
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "express-rate-limit": "^8.2.1",
-    "jsonwebtoken": "^9.0.2",
-    "socket.io": "^4.6.1",
-    "sqlite3": "^5.1.6",
-    "validator": "^13.15.23"
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.8",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "socket.io": "^4.8.4",
+    "sqlite3": "^6.0.1",
+    "validator": "^13.15.35"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "allowScripts": {
+    "sqlite3@6.0.1": true,
+    "bcrypt@6.0.0": true
   }
 }

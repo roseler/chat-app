@@ -1,335 +1,294 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
-import api from '../utils/api';
-import { getAuthToken, getUser } from '../utils/auth';
-import { encryptMessage, decryptMessage, getSharedKey, storeSharedKey, generateKey } from '../utils/encryption';
-import MessageList from './MessageList';
-import MessageInput from './MessageInput';
-
-const ChatWindow = ({ selectedUser, currentUser, onMenuClick }) => {
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import api, { errorText } from "../utils/api";
+import {
+  decryptMessage,
+  encryptMessage,
+  getSharedKey,
+} from "../utils/encryption";
+import MessageList from "./MessageList";
+import MessageInput from "./MessageInput";
+export default function ChatWindow({
+  selectedUser,
+  currentUser,
+  socket,
+  connected,
+  keyReady,
+  online,
+  onMenuClick,
+  menuButtonRef,
+  onRead,
+}) {
   const [messages, setMessages] = useState([]);
-  const [socket, setSocket] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [isTyping, setIsTyping] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState('connecting');
-  const messagesEndRef = useRef(null);
-  const selectedUserRef = useRef(selectedUser);
-  const typingTimeoutRef = useRef(null);
-  
-  // Keep ref updated
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [typing, setTyping] = useState(false);
+  const endRef = useRef(null);
+  const typingTimer = useRef(null);
+  const active = useRef(true);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   useEffect(() => {
-    selectedUserRef.current = selectedUser;
-  }, [selectedUser]);
-
-  // Initialize socket connection once (not per selectedUser)
-  useEffect(() => {
-    if (!currentUser) return;
-
-    // Initialize socket connection
-    const newSocket = io(process.env.REACT_APP_SOCKET_URL || 'http://localhost:3001', {
-      auth: {
-        token: getAuthToken()
-      },
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionAttempts: 5
-    });
-
-    // Connection event listeners
-    newSocket.on('connect', () => {
-      setConnectionStatus('connected');
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Socket connected');
-      }
-    });
-
-    newSocket.on('disconnect', () => {
-      setConnectionStatus('disconnected');
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Socket disconnected');
-      }
-    });
-
-    newSocket.on('connect_error', (error) => {
-      setConnectionStatus('error');
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Socket connection error');
-      }
-    });
-
-    newSocket.on('reconnect', () => {
-      setConnectionStatus('connected');
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Socket reconnected');
-      }
-    });
-
-    // Typing indicator listeners
-    newSocket.on('user_typing', (data) => {
-      const currentSelectedUser = selectedUserRef.current;
-      if (currentSelectedUser && parseInt(data.userId) === parseInt(currentSelectedUser.id)) {
-        setIsTyping(true);
-        // Clear existing timeout
-        if (typingTimeoutRef.current) {
-          clearTimeout(typingTimeoutRef.current);
-        }
-        // Hide typing indicator after 3 seconds
-        typingTimeoutRef.current = setTimeout(() => {
-          setIsTyping(false);
-        }, 3000);
-      }
-    });
-
-    newSocket.on('user_stopped_typing', (data) => {
-      const currentSelectedUser = selectedUserRef.current;
-      if (currentSelectedUser && parseInt(data.userId) === parseInt(currentSelectedUser.id)) {
-        setIsTyping(false);
-        if (typingTimeoutRef.current) {
-          clearTimeout(typingTimeoutRef.current);
-        }
-      }
-    });
-
-    // Listen for new messages (for any user)
-    newSocket.on('receive_message', (message) => {
-      // Get current selectedUser from ref (to avoid dependency issues)
-      const currentSelectedUser = selectedUserRef.current;
-      
-      // Convert IDs to numbers for comparison
-      const senderId = parseInt(message.senderId);
-      const receiverId = parseInt(message.receiverId);
-      const currentUserId = parseInt(currentUser.id);
-      const selectedUserId = currentSelectedUser ? parseInt(currentSelectedUser.id) : null;
-      
-      // Check if message is for current user
-      if (receiverId !== currentUserId) {
-        return;
-      }
-      
-      // If a user is selected, only show messages from that user
-      if (selectedUserId !== null && senderId !== selectedUserId) {
-        return;
-      }
-      
-      handleReceivedMessage(message);
-    });
-
-    newSocket.on('message_sent', () => {
-      // Message sent confirmation - no logging needed
-    });
-
-    newSocket.on('error', () => {
-      console.error('Socket error');
-    });
-
-    setSocket(newSocket);
-
+    active.current = true;
     return () => {
-      newSocket.off('receive_message');
-      newSocket.off('message_sent');
-      newSocket.off('error');
-      newSocket.off('connect');
-      newSocket.off('disconnect');
-      newSocket.off('connect_error');
-      newSocket.off('reconnect');
-      newSocket.off('user_typing');
-      newSocket.off('user_stopped_typing');
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      newSocket.close();
+      active.current = false;
+      clearTimeout(typingTimer.current);
     };
-  }, [currentUser]); // Only recreate when currentUser changes, not selectedUser
-
-  // Load messages when selectedUser changes
-  useEffect(() => {
-    if (selectedUser) {
-      loadMessages();
-    }
-  }, [selectedUser]);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const loadMessages = async () => {
-    try {
-      setLoading(true);
-      const response = await api.get(`/messages/conversation/${selectedUser.id}`);
-      const loadedMessages = await decryptMessages(response.data);
-      setMessages(loadedMessages);
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Error loading messages:', error);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const decryptMessages = async (encryptedMessages) => {
-    const decrypted = [];
-    for (const msg of encryptedMessages) {
-      const sharedKey = getSharedKey(currentUser.id, msg.senderId === currentUser.id ? msg.receiverId : msg.senderId);
-      if (sharedKey) {
-        const decryptedText = decryptMessage(msg.encrypted_content, msg.iv, sharedKey);
-        if (decryptedText) {
-          decrypted.push({
-            ...msg,
-            content: decryptedText,
-            isSent: msg.senderId === currentUser.id
-          });
-        }
-      }
-    }
-    return decrypted;
-  };
-
-  const handleReceivedMessage = async (message) => {
-    // Convert IDs to numbers for consistency
-    const senderId = parseInt(message.senderId);
-    const receiverId = parseInt(message.receiverId);
-    const currentUserId = parseInt(currentUser.id);
-    
-    // Verify this message is for the current user
-    if (receiverId !== currentUserId) {
-      return;
-    }
-    
-    // Get shared key
-    const sharedKey = getSharedKey(currentUser.id, senderId);
-    
-    if (!sharedKey) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Failed to get or generate shared key');
-      }
-      return;
-    }
-    
-    // Decrypt message
-    const decryptedText = decryptMessage(message.encryptedContent, message.iv, sharedKey);
-    
-    if (decryptedText) {
-      setMessages(prev => {
-        // Check if message already exists (avoid duplicates)
-        const exists = prev.some(msg => {
-          return msg.id === message.id || 
-                 (msg.senderId === senderId && 
-                  msg.receiverId === receiverId && 
-                  msg.content === decryptedText &&
-                  Math.abs(new Date(msg.timestamp) - new Date(message.timestamp)) < 1000);
-        });
-        
-        if (exists) {
-          return prev;
-        }
-        
-        const newMessage = {
-          id: message.id,
-          senderId: senderId,
-          receiverId: receiverId,
-          content: decryptedText,
-          encrypted_content: message.encryptedContent,
-          iv: message.iv,
-          timestamp: message.timestamp,
-          isSent: false
-        };
-        
-        return [...prev, newMessage];
-      });
-    } else {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Failed to decrypt message');
-      }
-    }
-  };
-
-  const handleSendMessage = async (content) => {
-    if (!content.trim() || !socket || !selectedUser) {
-      return;
-    }
-
-    if (!socket.connected) {
-      alert('Connection lost. Please refresh the page.');
-      return;
-    }
-
-    // Get shared key (will be generated deterministically if it doesn't exist)
-    const sharedKey = getSharedKey(currentUser.id, selectedUser.id);
-
-    // Encrypt message
-    const { encryptedContent, iv } = encryptMessage(content, sharedKey);
-
-    // Ensure receiverId is a number
-    const receiverId = parseInt(selectedUser.id);
-
-    // Send via socket
-    socket.emit('send_message', {
-      receiverId: receiverId,
-      encryptedContent,
-      iv
-    }, (response) => {
-      // Callback to confirm message was received by server
-      if (response && response.error) {
-        console.error('Failed to send message');
-        alert('Failed to send message. Please try again.');
-      }
-    });
-
-    // Add to local state immediately (optimistic update)
-    setMessages(prev => [...prev, {
-      id: Date.now(), // Temporary ID
-      senderId: currentUser.id,
-      receiverId: selectedUser.id,
-      content,
-      encrypted_content: encryptedContent,
-      iv,
-      timestamp: new Date().toISOString(),
-      isSent: true
-    }]);
-  };
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  // Debug state logging removed for security
-
-  // Early return must be AFTER all hooks
-  if (!selectedUser) {
-    return (
-      <div className="chat-window">
-        <div className="empty-chat">Select a user to start chatting</div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="chat-window">
-      <div className="chat-header">
-        {onMenuClick && (
-          <button className="menu-toggle-btn" onClick={onMenuClick} aria-label="Open menu">
-            ☰
-          </button>
-        )}
-        <div className="chat-header-info">
-          <h3>{selectedUser.username}</h3>
-          <div className="chat-header-status">
-            {selectedUser.isOnline && (
-              <span className="online-indicator" title="Online">●</span>
-            )}
-            <span className={`connection-status ${connectionStatus}`} title={connectionStatus}>
-              {connectionStatus === 'connected' ? '●' : connectionStatus === 'connecting' ? '○' : '✕'}
-            </span>
-          </div>
-        </div>
-      </div>
-      <MessageList messages={messages} loading={loading} messagesEndRef={messagesEndRef} isTyping={isTyping} typingUser={selectedUser.username} />
-      <MessageInput onSend={handleSendMessage} socket={socket} selectedUser={selectedUser} />
-    </div>
+  }, []);
+  const normalize = useCallback(
+    async (message) => {
+      const encrypted = message.encryptedContent || message.encrypted_content;
+      const legacy = !encrypted?.startsWith("v2:");
+      const key = legacy
+        ? null
+        : await getSharedKey(currentUser.id, selectedUser);
+      const senderId = Number(message.senderId ?? message.sender_id);
+      return {
+        ...message,
+        senderId,
+        receiverId: Number(message.receiverId ?? message.receiver_id),
+        isSent: senderId === currentUser.id,
+        legacy,
+        content: await decryptMessage(
+          message.encryptedContent || message.encrypted_content,
+          message.iv,
+          key,
+          [currentUser.id, selectedUser.id],
+        ),
+      };
+    },
+    [currentUser?.id, selectedUser],
   );
-};
-
-export default ChatWindow;
-
+  const markRead = useCallback(
+    async (list) => {
+      if (document.visibilityState !== "visible") return;
+      const unread = list.filter(
+        (message) => !message.isSent && !message.read_status,
+      );
+      if (!unread.length) return;
+      try {
+        await Promise.all(
+          unread.map((message) => api.put(`/messages/${message.id}/read`)),
+        );
+        if (active.current) {
+          setMessages((prev) =>
+            prev.map((message) =>
+              !message.isSent ? { ...message, read_status: 1 } : message,
+            ),
+          );
+          onRead();
+        }
+      } catch {
+        /* Retry on visibility change or reconnect. */
+      }
+    },
+    [onRead],
+  );
+  const load = useCallback(async () => {
+    if (!selectedUser || !keyReady) return;
+    setLoading(true);
+    setError("");
+    try {
+      const { data } = await api.get(
+        `/messages/conversation/${selectedUser.id}`,
+      );
+      const list = await Promise.all(data.map(normalize));
+      if (active.current) {
+        setMessages((prev) => [
+          ...list,
+          ...prev.filter(
+            (message) => !list.some((item) => item.id === message.id),
+          ),
+        ]);
+        await markRead(list);
+      }
+    } catch (err) {
+      if (active.current) setError(errorText(err, err.message));
+    } finally {
+      if (active.current) setLoading(false);
+    }
+  }, [selectedUser, keyReady, normalize, markRead]);
+  useEffect(() => {
+    if (connected) load();
+  }, [connected, load]);
+  useEffect(() => {
+    if (!socket || !selectedUser) return;
+    const receive = async (message) => {
+      const otherId =
+        message.senderId === currentUser.id
+          ? message.receiverId
+          : message.senderId;
+      if (otherId !== selectedUser.id) return;
+      try {
+        const item = await normalize(message);
+        if (!active.current) return;
+        setMessages((prev) =>
+          prev.some((m) => m.id === item.id) ? prev : [...prev, item],
+        );
+        await markRead([item]);
+      } catch (err) {
+        if (active.current) setError(errorText(err, err.message));
+      }
+    };
+    const read = ({ id }) =>
+      setMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, read_status: 1 } : m)),
+      );
+    const delivered = ({ id }) =>
+      setMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, delivered: true } : m)),
+      );
+    const startTyping = ({ userId }) => {
+      if (userId !== selectedUser.id) return;
+      setTyping(true);
+      clearTimeout(typingTimer.current);
+      typingTimer.current = setTimeout(() => setTyping(false), 3500);
+    };
+    const stopTyping = ({ userId }) => {
+      if (userId === selectedUser.id) {
+        setTyping(false);
+        clearTimeout(typingTimer.current);
+      }
+    };
+    socket.on("receive_message", receive);
+    socket.on("message_read", read);
+    socket.on("message_delivered", delivered);
+    socket.on("user_typing", startTyping);
+    socket.on("user_stopped_typing", stopTyping);
+    const visible = () => markRead(messagesRef.current);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      socket.off("receive_message", receive);
+      socket.off("message_read", read);
+      socket.off("message_delivered", delivered);
+      socket.off("user_typing", startTyping);
+      socket.off("user_stopped_typing", stopTyping);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [socket, selectedUser, currentUser?.id, normalize, markRead]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  }, [messages, typing]);
+  async function send(content) {
+    if (!socket?.connected || !selectedUser)
+      throw new Error("You’re disconnected. Reconnect to send your draft.");
+    setError("");
+    const key = await getSharedKey(currentUser.id, selectedUser);
+    const encrypted = await encryptMessage(content, key);
+    return new Promise((resolve, reject) => {
+      socket
+        .timeout(12000)
+        .emit(
+          "send_message",
+          { receiverId: selectedUser.id, ...encrypted },
+          (err, response) => {
+            if (err || response?.error || !response?.message)
+              return reject(
+                new Error(
+                  response?.error ||
+                    "Confirmation timed out. Check the conversation before sending again; your draft is saved.",
+                ),
+              );
+            const message = { ...response.message, content, isSent: true };
+            if (active.current)
+              setMessages((prev) =>
+                prev.some((m) => m.id === message.id)
+                  ? prev
+                  : [...prev, message],
+              );
+            resolve();
+          },
+        );
+    });
+  }
+  return (
+    <section
+      className="chat-window"
+      aria-label={
+        selectedUser ? `Conversation with ${selectedUser.username}` : "Chat"
+      }
+    >
+      <header className="chat-header">
+        <button
+          ref={menuButtonRef}
+          className="menu-toggle-btn text-button"
+          onClick={onMenuClick}
+          aria-label="Open conversations"
+        >
+          ☰
+        </button>
+        {selectedUser ? (
+          <>
+            <span className="avatar">
+              {selectedUser.username.slice(0, 1).toUpperCase()}
+            </span>
+            <div className="chat-header-info">
+              <h1>{selectedUser.username}</h1>
+              <span className="muted">
+                {typing ? "Typing…" : online ? "Online now" : "Offline"}
+              </span>
+            </div>
+            <span className="chat-label">24h history</span>
+          </>
+        ) : (
+          <h1>Your conversations</h1>
+        )}
+      </header>
+      {!selectedUser ? (
+        <div className="welcome-chat">
+          <span className="welcome-symbol" aria-hidden="true">
+            ↗
+          </span>
+          <span className="eyebrow">A CONVERSATION AWAY</span>
+          <h2>A little hello goes a long way.</h2>
+          <p>
+            Choose someone to start a conversation.
+            <br />
+            Make their day a little less quiet.
+          </p>
+          <button className="primary-button mobile-only" onClick={onMenuClick}>
+            Find your people
+          </button>
+        </div>
+      ) : (
+        <>
+          {error && (
+            <div className="notice error" role="alert">
+              {error}
+              <button className="text-button" onClick={load}>
+                Try again
+              </button>
+            </div>
+          )}
+          {!selectedUser.public_key && (
+            <div className="notice" role="status">
+              {selectedUser.username} needs to sign in to enable encrypted
+              messaging.
+            </div>
+          )}
+          <MessageList
+            messages={messages}
+            loading={loading}
+            messagesEndRef={endRef}
+            isTyping={typing}
+            typingUser={selectedUser.username}
+          />
+          <MessageInput
+            key={`${currentUser.id}:${selectedUser.id}`}
+            draftKey={`draft:${currentUser.id}:${selectedUser.id}`}
+            onSend={send}
+            socket={socket}
+            selectedUser={selectedUser}
+            disabled={!connected || !keyReady || !selectedUser.public_key}
+          />
+          <p className="conversation-footnote">
+            Conversation history is available for 24 hours.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}

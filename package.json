@@ -9,11 +9,15 @@
     "client": "cd frontend && npm start",
     "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install"
   },
-  "keywords": ["chat", "encryption", "messaging"],
+  "keywords": [
+    "chat",
+    "encryption",
+    "messaging"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "prettier": "^3.9.10"
   }
 }
-

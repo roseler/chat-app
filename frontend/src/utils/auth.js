@@ -1,32 +1,20 @@
-export const setAuthToken = (token) => {
-  localStorage.setItem('token', token);
-};
-
-export const getAuthToken = () => {
-  return localStorage.getItem('token');
-};
-
-export const setUser = (user) => {
-  localStorage.setItem('user', JSON.stringify(user));
-};
-
+export const setUser = (user) =>
+  sessionStorage.setItem("user", JSON.stringify(user));
 export const getUser = () => {
-  const userStr = localStorage.getItem('user');
-  return userStr ? JSON.parse(userStr) : null;
+  try {
+    return JSON.parse(sessionStorage.getItem("user"));
+  } catch {
+    return null;
+  }
 };
-
 export const clearAuth = () => {
-  localStorage.removeItem('token');
-  localStorage.removeItem('user');
-  // Clear all encryption keys
-  Object.keys(localStorage).forEach(key => {
-    if (key.startsWith('encryption_key_') || key.startsWith('shared_key_')) {
-      localStorage.removeItem(key);
-    }
-  });
+  sessionStorage.removeItem("user");
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+  Object.keys(localStorage)
+    .filter(
+      (k) => k.startsWith("shared_key_") || k.startsWith("encryption_key_"),
+    )
+    .forEach((k) => localStorage.removeItem(k));
 };
-
-export const isAuthenticated = () => {
-  return !!getAuthToken();
-};
-
+export const isAuthenticated = () => !!getUser();
