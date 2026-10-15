@@ -22,7 +22,7 @@ If Cloudflare asks you to select an account or register a Workers subdomain, fin
 
 Open the Render dashboard and create a **Blueprint** from `https://github.com/roseler/chat-app`, branch `main`. Render reads the root `render.yaml`.
 
-Set `FRONTEND_URL` to the exact Cloudflare URL from step 1, without a trailing slash. The blueprint configures:
+The blueprint sets `FRONTEND_URL` to the deployed frontend, `https://quiet-chat.ros-03a.workers.dev`. If you use a different Cloudflare URL, update it to that exact origin without a trailing slash. The blueprint configures:
 
 | Setting        | Value                             |
 | -------------- | --------------------------------- |

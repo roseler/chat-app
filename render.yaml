@@ -19,6 +19,6 @@ services:
       - key: DB_PATH
         value: /var/data/database.sqlite
       - key: FRONTEND_URL
-        sync: false
+        value: https://quiet-chat.ros-03a.workers.dev
       - key: PROXY_SECRET
         generateValue: true
