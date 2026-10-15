@@ -96,7 +96,9 @@ export default function ChatWindow({
         setMessages((prev) => [
           ...list,
           ...prev.filter(
-            (message) => !list.some((item) => item.id === message.id),
+            (message) =>
+              new Date(message.timestamp).getTime() >= Date.now() - 86400000 &&
+              !list.some((item) => item.id === message.id),
           ),
         ]);
         await markRead(list);

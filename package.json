@@ -10,7 +10,9 @@
     "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install",
     "deploy:cf": "wrangler deploy",
     "login:cf": "wrangler login",
-    "test:deploy": "node --test cloudflare/test/*.test.mjs"
+    "test:deploy": "node --test cloudflare/test/*.test.mjs",
+    "dev:cloudflare": "wrangler dev --port 8787",
+    "test:cloudflare": "node --test cloudflare/test/integration.mjs"
   },
   "keywords": [
     "chat",
@@ -22,6 +24,11 @@
   "devDependencies": {
     "concurrently": "^8.2.2",
     "prettier": "^3.9.10",
-    "wrangler": "^4.151.0"
+    "wrangler": "^4.151.0",
+    "ws": "^8.22.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "validator": "^13.15.35"
   }
 }

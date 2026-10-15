@@ -13,6 +13,8 @@ npm run dev
 
 Open http://localhost:3000. The API and Socket.IO server run at http://localhost:3001. SQLite tables are created automatically; existing user accounts remain available. Sign in again after upgrading from the old token-based version.
 
+For the deployed Cloudflare architecture locally, run `npm run dev:cloudflare` and open http://localhost:8787. The Node/Socket.IO setup above remains available for legacy development.
+
 The frontend uses Vite. File polling is enabled for Windows/WSL mounted folders. To produce a frontend build:
 
 ```bash
@@ -21,7 +23,7 @@ npm run build --prefix frontend
 
 ## Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the Cloudflare frontend/proxy and Render backend setup. The repository includes `wrangler.jsonc` and `render.yaml`.
+The full app runs on Cloudflare Workers with a SQLite-backed Durable Object and hibernating WebSockets. No Render service is required. See [DEPLOYMENT.md](DEPLOYMENT.md) for deployment and local Cloudflare development. The repository includes `wrangler.jsonc`.
 
 ## Features
 
@@ -62,7 +64,7 @@ VITE_SOCKET_URL=http://localhost:3001
 
 By default, the frontend uses its current hostname with API port 3001. Set the URLs explicitly when deploying. Cookies require the frontend and backend to share a site. In production, use HTTPS and `NODE_ENV=production` for Secure cookies; configure the exact frontend origin. The app uses HttpOnly, SameSite=Strict cookies with hashed, revocable server-side sessions. It no longer uses JWT_SECRET or stores authentication tokens in localStorage.
 
-Use a persistent Node server and durable SQLite volume. The backend requires long-lived Socket.IO connections; the included Vercel service configuration is not a complete persistent chat hosting setup.
+The active deployment runs entirely on Cloudflare; its SQLite database is managed by a Durable Object. The optional Node backend requires a persistent server and SQLite volume if hosted separately. The old Vercel configuration is not used for Cloudflare deployments.
 
 ## Verification
 

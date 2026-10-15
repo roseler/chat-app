@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { io } from "socket.io-client";
+import { createRealtime } from "../utils/realtime";
 import api, { errorText, SOCKET_URL } from "../utils/api";
 import { getUser, clearAuth, setUser } from "../utils/auth";
 import { initializeIdentity } from "../utils/encryption";
@@ -67,19 +67,14 @@ export default function Chat() {
     const timer = setInterval(() => {
       refreshUsers().catch(() => {});
       refreshUnread();
-    }, 15000);
+    }, 60000);
     return () => {
       active = false;
       clearInterval(timer);
     };
   }, [refreshUsers, refreshUnread]);
   useEffect(() => {
-    const connection = io(SOCKET_URL, {
-      withCredentials: true,
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 10000,
-    });
+    const connection = createRealtime(SOCKET_URL);
     socketRef.current = connection;
     setSocket(connection);
     const connected = () => {
@@ -109,6 +104,7 @@ export default function Chat() {
       refreshUnread();
     });
     connection.on("unread_changed", refreshUnread);
+    connection.on("users_changed", () => refreshUsers().catch(() => {}));
     const offline = () => setStatus("offline");
     const reconnect = () => {
       setStatus("reconnecting");

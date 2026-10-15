@@ -1,6 +1,8 @@
 # Security review
 
-Reviewed 2026-10-15 as part of the chat improvements.
+Reviewed 2026-10-15 as part of the chat improvements and Cloudflare migration.
+
+The active hosted backend is now `cloudflare/chat-room.mjs`: Cloudflare Workers routes the API and native WebSockets to one SQLite-backed Durable Object. It uses bcrypt cost 12 via bcryptjs, opaque hashed sessions, same-origin checks, and persistent login/registration/message rate limits. Hibernating sockets retain authentication metadata through attachments; sessions are checked for every application event and revoked sockets are closed. The original Node backend is retained for local development only. No Render account, proxy secret, or paid-plan upgrade is required.
 
 ## Changes implemented
 
@@ -20,7 +22,7 @@ Reviewed 2026-10-15 as part of the chat improvements.
 - Legacy ciphertext used public, predictable keys. It remains in the database until normal retention cleanup, and remains readable with a legacy-encryption warning. The predictable key is used only for read compatibility. New encryption does not protect old ciphertext retroactively.
 - Message metadata, user directory, online presence, and read receipts remain visible to the server. Connected clients may retain displayed messages beyond server retention. Backups and filesystem snapshots require their own retention policy.
 - A send timeout can occur after a successful save. The draft remains; users should check the conversation before manually sending again. No persistent offline queue or exactly-once delivery is claimed.
-- SQLite and in-memory presence/rate limiting target a single server. Multi-instance deployments need shared sessions/presence/rate limits and a Socket.IO adapter. Persistent disks and database backups must be configured by the hosting operator.
+- The Cloudflare deployment targets a small app with one SQLite-backed Durable Object. It has a single coordination point and the Free plan’s per-object storage and request/compute limits. Rate limits survive restarts in SQLite; presence is derived from hibernating socket attachments. Larger workloads require a separate scaling design. Durable Object storage survives deploys, but disaster recovery and backups still need an operational policy. The optional legacy Node backend has different hosting requirements.
 - No password reset, email verification, MFA, or account deletion flow is provided. HTTPS, frontend CSP/frame headers, host isolation, monitoring, and backup policy must be configured at deployment. Never expose the development server as production hosting.
 
 ## References

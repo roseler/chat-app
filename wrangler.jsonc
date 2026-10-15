@@ -4,13 +4,18 @@
   "main": "cloudflare/worker.mjs",
   "compatibility_date": "2026-10-15",
   "workers_dev": true,
-  "keep_vars": true,
+  "keep_vars": false,
   "preview_urls": false,
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "CHAT", "class_name": "ChatRoom" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatRoom"] }],
   "assets": {
     "directory": "frontend/build",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api", "/api/*", "/socket.io", "/socket.io/*"],
+    "run_worker_first": ["/api", "/api/*", "/ws", "/socket.io", "/socket.io/*"],
   },
   "build": {
     "command": "npm ci --prefix frontend && npm run build --prefix frontend",
