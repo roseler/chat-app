@@ -1,13 +1,6 @@
 {
-  "experimentalServices": {
-    "frontend": {
-      "entrypoint": "frontend",
-      "routePrefix": "/",
-      "framework": "vite"
-    },
-    "backend": {
-      "entrypoint": "backend",
-      "routePrefix": "/api"
-    }
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": false
   }
 }
