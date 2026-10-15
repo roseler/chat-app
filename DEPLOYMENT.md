@@ -38,14 +38,18 @@ npm run dev:cloudflare
 
 Open http://localhost:8787. Wrangler builds and serves the production frontend with a local Durable Object/database. Local data is kept under `.wrangler/`, which is ignored by Git. Local cookies omit Secure because localhost development uses HTTP.
 
-With that runtime running, use another terminal:
+Run unit and routing tests with `npm run test:deploy` (Node 24, including its built-in SQLite module).
+
+For integration tests, build the frontend, then start a **separate local fixture** instead of the development command above:
 
 ```bash
-npm run test:deploy
-npm run test:cloudflare
+npm run build --prefix frontend
+npx wrangler dev --config cloudflare/test/wrangler.jsonc --port 8787 --persist-to /tmp/quiet-owner-integration
 ```
 
-Routing tests cover asset/API dispatch. Integration tests exercise the actual local Workers runtime: registration, login cookies, key pinning, real authenticated WebSockets, encrypted payloads, online/typing events, delivery/read ownership, unread counts, password changes, logout, and session revocation. Integration tests refuse non-localhost targets and use unique test accounts. They write only to local development storage and are subject to registration limits.
+In another terminal, run `npm run test:cloudflare`. Use a fresh persistence directory for each run because public keys are pinned. The fixture provisions a local owner with password `Example123!`; it is not imported by the production Worker and must never be deployed. Integration tests refuse non-localhost targets. They cover the owner and two visitors, contact/presence privacy, blocked visitor-to-visitor traffic, encrypted messaging, sessions, key pinning, read receipts, password changes, and logout. SQLite-backed unit tests also check inaccessible prior peer messages, reserved registration, and persistent owner identity.
+
+The production upgrade pins the existing account matching the identity in `shared/chat-policy.cjs`. It adds `app_settings` and `account_keys` in the same database; keep the Worker name, binding, class migration, and object name unchanged. The public registration endpoint cannot provision an owner. If the existing account does not match, visitors have no contact and messaging remains closed until the intended account is provisioned by the operator.
 
 The original Node backend remains available for legacy development with `npm run dev`; it is not deployed or required by the Cloudflare site. Its native Socket.IO development connection is selected only in Vite development builds. The hosted app and `dev:cloudflare` use native WebSockets.
 
@@ -75,3 +79,7 @@ Connect this GitHub repository to the existing `quiet-chat` Worker using Cloudfl
 - [SQLite-backed Durable Object storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 - [Hibernating WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
 - [Free-plan pricing and limits](https://developers.cloudflare.com/durable-objects/platform/pricing/)
+
+## Account messaging upgrade
+
+Fresh accounts create a password-encrypted messaging-key backup at sign-up. Existing accounts with browser-only keys see **Link messaging to your account**; they must enter their password and acknowledge earlier-message limitations before the one-time switch. The deployment itself never resets an existing identity. After setup, sign-in restores the same key in another browser or on the custom domain. Password changes preserve message access by rewrapping the backup. Keep the Durable Object database intact: it contains both encrypted messages and encrypted key backups. Browser checks cover fresh-device restores, password changes, and the explicit legacy transition.

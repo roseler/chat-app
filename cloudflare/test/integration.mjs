@@ -22,16 +22,20 @@ async function request(path, { method = "GET", body, cookie, origin } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
 }
-async function account(name) {
-  const response = await request("/auth/register", {
+async function account(name, owner = false) {
+  const response = await request(owner ? "/auth/login" : "/auth/register", {
     method: "POST",
     body: {
-      username: `${name}_${suffix}`,
+      username: owner ? "roseler" : `${name}_${suffix}`,
       email: `${name}_${suffix}@example.com`,
       password: "Example123!",
     },
   });
-  assert.equal(response.status, 201, await response.clone().text());
+  assert.equal(
+    response.status,
+    owner ? 200 : 201,
+    await response.clone().text(),
+  );
   assert.match(response.headers.get("set-cookie"), /HttpOnly.*SameSite=Strict/);
   const cookie = response.headers.get("set-cookie").split(";")[0];
   const user = (await response.json()).user;
@@ -95,9 +99,12 @@ test("Cloudflare accounts, secure sessions, real WebSockets, ownership, key pinn
     ).status,
     403,
   );
-  const alice = await account("alice"),
-    bob = await account("bob");
-  let a, b;
+  const alice = await account("owner", true),
+    bob = await account("bob"),
+    carol = await account("carol");
+  assert.equal(alice.user.is_owner, true);
+  assert.equal(bob.user.is_owner, false);
+  let a, b, c;
   try {
     assert.equal(
       (
@@ -116,8 +123,78 @@ test("Cloudflare accounts, secure sessions, real WebSockets, ownership, key pinn
       directory.find((user) => user.id === bob.user.id).email,
       undefined,
     );
+    for (const visitor of [bob, carol]) {
+      const contacts = await (
+        await request("/auth/users", { cookie: visitor.cookie })
+      ).json();
+      assert.deepEqual(
+        contacts.map((u) => u.id),
+        [alice.user.id],
+      );
+      assert.equal(contacts[0].email, undefined);
+      assert.equal(
+        (
+          await request(
+            `/messages/conversation/${visitor === bob ? carol.user.id : bob.user.id}`,
+            { cookie: visitor.cookie },
+          )
+        ).status,
+        403,
+      );
+    }
+    assert.ok(directory.some((u) => u.id === carol.user.id));
     a = await socket(alice.cookie);
     b = await socket(bob.cookie);
+    c = await socket(carol.cookie);
+    await wait(c.inbox, (p) => p.event === "online_users");
+    const roster = await (
+      await request("/auth/online", { cookie: bob.cookie })
+    ).json();
+    assert.deepEqual(
+      roster.map((u) => u.userId),
+      [alice.user.id],
+    );
+    const blocked = await emit(b, "send_message", {
+      receiverId: carol.user.id,
+      encryptedContent: "v2:AAAA",
+      iv: "AAAAAAAAAAAAAAAA",
+    });
+    assert.match(blocked.error, /only chat with roseler/);
+    b.ws.send(
+      JSON.stringify({ event: "typing", data: { receiverId: carol.user.id } }),
+    );
+    b.ws.send(
+      JSON.stringify({
+        event: "stop_typing",
+        data: { receiverId: carol.user.id },
+      }),
+    );
+    b.ws.send("ping");
+    await wait(b.inbox, (p) => p.event === "pong");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(
+      c.inbox.some((p) =>
+        ["user_typing", "user_stopped_typing", "receive_message"].includes(
+          p.event,
+        ),
+      ),
+      false,
+    );
+    for (const packet of c.inbox.filter((p) => p.event === "online_users"))
+      assert.deepEqual(
+        packet.data.map((u) => u.userId),
+        [alice.user.id],
+      );
+    const toOwner = await emit(c, "send_message", {
+      receiverId: alice.user.id,
+      encryptedContent: "v2:AAAA",
+      iv: "AAAAAAAAAAAAAAAA",
+    });
+    assert.equal(toOwner.success, true);
+    await wait(
+      a.inbox,
+      (p) => p.event === "receive_message" && p.data.senderId === carol.user.id,
+    );
     await wait(
       a.inbox,
       (packet) =>
@@ -258,5 +335,6 @@ test("Cloudflare accounts, secure sessions, real WebSockets, ownership, key pinn
   } finally {
     a?.ws.close();
     b?.ws.close();
+    c?.ws.close();
   }
 });

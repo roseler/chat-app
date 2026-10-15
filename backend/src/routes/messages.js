@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Message = require("../models/Message");
+const { allowed } = require("../utils/chatPolicy");
 const { authenticateToken } = require("../middleware/auth");
 
 // Get conversation between two users
@@ -12,6 +13,8 @@ router.get("/conversation/:userId", authenticateToken, async (req, res) => {
     if (!Number.isSafeInteger(otherUserId) || otherUserId < 1)
       return res.status(400).json({ error: "Invalid user" });
 
+    if (!(await allowed(currentUserId, otherUserId)))
+      return res.status(403).json({ error: "You can only chat with roseler." });
     const messages = await Message.getConversation(
       currentUserId,
       otherUserId,
@@ -48,7 +51,8 @@ router.put("/:messageId/read", authenticateToken, async (req, res) => {
       "SELECT * FROM messages WHERE id = ? AND receiver_id = ?",
       [req.params.messageId, req.user.userId],
     );
-    if (!message) return res.status(404).json({ error: "Message not found" });
+    if (!message || !(await allowed(req.user.userId, message.sender_id)))
+      return res.status(404).json({ error: "Message not found" });
     await Message.markAsRead(message.id, req.user.userId);
     req.app
       .get("io")

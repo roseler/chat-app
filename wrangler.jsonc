@@ -3,7 +3,7 @@
   "name": "quiet-chat",
   "main": "cloudflare/worker.mjs",
   "compatibility_date": "2026-10-15",
-  "workers_dev": true,
+  "workers_dev": false,
   "keep_vars": false,
   "preview_urls": false,
   "compatibility_flags": ["nodejs_compat"],

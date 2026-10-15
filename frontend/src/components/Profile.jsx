@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import api, { errorText } from "../utils/api";
+import { passwordKeyUpdate } from "../utils/encryption";
 import PasswordField from "./PasswordField";
 import Icon from "./Icon";
 export default function Profile({ user, onClose, onPasswordChanged }) {
@@ -16,7 +17,13 @@ export default function Profile({ user, onClose, onPasswordChanged }) {
     if (newPassword !== confirm) return setError("New passwords do not match.");
     setBusy(true);
     try {
+      const keyUpdate = await passwordKeyUpdate(
+        user.id,
+        currentPassword,
+        newPassword,
+      );
       const { data } = await api.put("/auth/password", {
+        ...keyUpdate,
         currentPassword,
         newPassword,
       });
@@ -93,8 +100,9 @@ export default function Profile({ user, onClose, onPasswordChanged }) {
       <div className="privacy-note">
         <h3>Message access</h3>
         <p>
-          Messages can only be opened in this browser. Clearing site data
-          removes access to your conversations. History is kept for 24 hours.
+          Sign in with your account password to open messages on another browser
+          or device. Your messaging key is backed up encrypted. History is kept
+          for 24 hours.
         </p>
       </div>
     </section>

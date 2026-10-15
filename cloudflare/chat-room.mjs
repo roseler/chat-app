@@ -1,17 +1,23 @@
 import bcrypt from "bcryptjs";
 import validator from "validator";
+import policy from "../shared/chat-policy.cjs";
+import backupFormat from "../shared/key-backup.cjs";
+const { validBackup } = backupFormat;
+const { OWNER_USERNAME, OWNER_EMAIL, canChat, isReserved, visibleOnline } =
+  policy;
 
 const DAY = 86400000;
 const SESSION_AGE = 7 * DAY;
 const encoder = new TextEncoder();
 const MAX_BODY = 40000;
 const positiveId = (value) => Number.isSafeInteger(value) && value > 0;
-const publicUser = (user) => ({
+const publicUser = (user, ownerId) => ({
   id: user.id,
   username: user.username,
   email: user.email,
   public_key: user.public_key,
   created_at: user.created_at,
+  is_owner: user.id === ownerId,
 });
 const json = (body, status = 200, extra = {}) =>
   Response.json(body, {
@@ -107,6 +113,8 @@ export class ChatRoom {
         iv TEXT NOT NULL, timestamp TEXT NOT NULL, read_status INTEGER NOT NULL DEFAULT 0,
         delivered INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS account_keys (user_id INTEGER PRIMARY KEY REFERENCES users(id), backup TEXT NOT NULL, version INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
       CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
@@ -114,6 +122,7 @@ export class ChatRoom {
       CREATE INDEX IF NOT EXISTS messages_unread ON messages(receiver_id, read_status, timestamp);
       CREATE INDEX IF NOT EXISTS messages_time ON messages(timestamp);
     `);
+    this.ownerId();
     ctx.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair("ping", "pong"),
     );
@@ -127,6 +136,46 @@ export class ChatRoom {
   }
   one(query, ...params) {
     return this.rows(query, ...params)[0];
+  }
+  ownerId() {
+    if (this.ownerAccountId) return this.ownerAccountId;
+    const pinned = this.one(
+      "SELECT value FROM app_settings WHERE key = 'owner_id'",
+    );
+    if (pinned) return (this.ownerAccountId = Number(pinned.value));
+    // Bind the already-existing account. Registration cannot claim this identity.
+    const owner = this.one(
+      "SELECT id FROM users WHERE username = ? AND lower(email) = ?",
+      OWNER_USERNAME,
+      OWNER_EMAIL,
+    );
+    if (!owner) return null;
+    this.sql.exec(
+      "INSERT OR IGNORE INTO app_settings (key,value) VALUES ('owner_id',?)",
+      String(owner.id),
+    );
+    return (this.ownerAccountId = Number(
+      this.one("SELECT value FROM app_settings WHERE key = 'owner_id'").value,
+    ));
+  }
+  contacts(userId) {
+    const ownerId = this.ownerId();
+    if (userId === ownerId)
+      return this.rows(
+        "SELECT u.id,u.username,u.public_key,COALESCE(k.version,0) AS key_version FROM users u LEFT JOIN account_keys k ON k.user_id=u.id WHERE u.id != ? ORDER BY u.username COLLATE NOCASE",
+        userId,
+      );
+    return ownerId
+      ? this.rows(
+          "SELECT u.id,u.username,u.public_key,COALESCE(k.version,0) AS key_version FROM users u LEFT JOIN account_keys k ON k.user_id=u.id WHERE u.id = ?",
+          ownerId,
+        )
+      : [];
+  }
+  directoryChanged(userId) {
+    const ownerId = this.ownerId();
+    if (userId === ownerId) this.emit("users_changed", {});
+    else if (ownerId) this.emit("users_changed", {}, ownerId);
   }
   limit(key, max, windowMs) {
     const now = Date.now();
@@ -194,7 +243,7 @@ export class ChatRoom {
       }
     }
   }
-  onlineUsers() {
+  onlineUsers(viewerId) {
     const users = new Map();
     for (const ws of this.sockets()) {
       const data = ws.deserializeAttachment();
@@ -204,10 +253,30 @@ export class ChatRoom {
           username: data.username,
         });
     }
-    return [...users.values()];
+    return visibleOnline([...users.values()], viewerId, this.ownerId());
   }
   presence() {
-    this.emit("online_users", this.onlineUsers());
+    const ownerId = this.ownerId();
+    const users = new Map();
+    for (const ws of this.sockets()) {
+      const data = ws.deserializeAttachment();
+      if (data && data.expiresAt > Date.now())
+        users.set(data.userId, {
+          userId: data.userId,
+          username: data.username,
+        });
+    }
+    for (const ws of this.sockets()) {
+      const viewerId = ws.deserializeAttachment()?.userId;
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "online_users",
+            data: visibleOnline([...users.values()], viewerId, ownerId),
+          }),
+        );
+      } catch {}
+    }
   }
   closeSession(sessionId) {
     for (const ws of this.ctx.getWebSockets(`session:${sessionId}`)) {
@@ -257,25 +326,36 @@ export class ChatRoom {
       if (path === "/ws" && method === "GET")
         return this.connect(request, user);
       if (path === "/api/auth/me" && method === "GET")
-        return json(publicUser(user));
+        return json(publicUser(user, this.ownerId()));
       if (path === "/api/auth/users" && method === "GET")
-        return json(
-          this.rows(
-            "SELECT id,username,public_key FROM users WHERE id != ? ORDER BY username COLLATE NOCASE",
-            user.id,
-          ),
-        );
+        return json(this.contacts(user.id));
       if (path === "/api/auth/online" && method === "GET")
-        return json(this.onlineUsers());
+        return json(this.onlineUsers(user.id));
+      if (path === "/api/auth/messaging-key" && method === "GET") {
+        const saved = this.one(
+          "SELECT u.public_key,k.backup,k.version FROM users u LEFT JOIN account_keys k ON k.user_id=u.id WHERE u.id = ?",
+          user.id,
+        );
+        return json({
+          backup: saved?.backup ? JSON.parse(saved.backup) : null,
+          version: saved?.version || 0,
+          publicKey: saved?.public_key ? JSON.parse(saved.public_key) : null,
+        });
+      }
+      if (path === "/api/auth/messaging-key" && method === "PUT")
+        return await this.saveMessagingKey(request, user);
       if (path === "/api/auth/public-key" && method === "PUT")
         return await this.publicKey(request, user);
       if (path === "/api/auth/password" && method === "PUT")
         return await this.changePassword(request, user);
       if (path === "/api/messages/unread" && method === "GET") {
         const bySender = this.rows(
-          "SELECT sender_id AS userId, COUNT(*) AS count FROM messages WHERE receiver_id = ? AND read_status = 0 AND timestamp >= ? GROUP BY sender_id",
+          "SELECT sender_id AS userId, COUNT(*) AS count FROM messages WHERE receiver_id = ? AND read_status = 0 AND timestamp >= ? AND (? = ? OR sender_id = ?) GROUP BY sender_id",
           user.id,
           new Date(Date.now() - DAY).toISOString(),
+          user.id,
+          this.ownerId() || -1,
+          this.ownerId() || -1,
         );
         return json({
           count: bySender.reduce((sum, row) => sum + row.count, 0),
@@ -286,6 +366,8 @@ export class ChatRoom {
       if (conversation && method === "GET") {
         const otherId = Number(conversation[1]);
         if (!positiveId(otherId)) throw fail("Invalid user.");
+        if (!canChat(user.id, otherId, this.ownerId()))
+          throw fail("You can only chat with roseler.", 403);
         const limit = Math.min(
           200,
           Math.max(
@@ -314,7 +396,8 @@ export class ChatRoom {
           Number(read[1]),
           user.id,
         );
-        if (!message) throw fail("Message not found.", 404);
+        if (!message || !canChat(user.id, message.sender_id, this.ownerId()))
+          throw fail("Message not found.", 404);
         if (!message.read_status) {
           this.sql.exec(
             "UPDATE messages SET read_status = 1, delivered = 1 WHERE id = ?",
@@ -352,6 +435,8 @@ export class ChatRoom {
       );
     if (email.length > 255 || !validator.isEmail(email))
       throw fail("Enter a valid email address.");
+    if (isReserved(username, email))
+      throw fail("That username or email is reserved.");
     if (!validPassword(body.password))
       throw fail(
         "Use 8 or more characters with uppercase, lowercase, and a number (maximum 72 bytes).",
@@ -383,9 +468,12 @@ export class ChatRoom {
         throw fail("Username or email already exists.");
       throw error;
     }
-    this.emit("users_changed", {});
+    this.directoryChanged(user.id);
     return json(
-      { message: "User created successfully", user: publicUser(user) },
+      {
+        message: "User created successfully",
+        user: publicUser(user, this.ownerId()),
+      },
       201,
       { "Set-Cookie": cookie(request, session.token) },
     );
@@ -423,9 +511,13 @@ export class ChatRoom {
       "UPDATE rate_limits SET count = MAX(0, count - 1) WHERE key = ?",
       key,
     );
-    return json({ message: "Login successful", user: publicUser(user) }, 200, {
-      "Set-Cookie": cookie(request, session.token),
-    });
+    return json(
+      { message: "Login successful", user: publicUser(user, this.ownerId()) },
+      200,
+      {
+        "Set-Cookie": cookie(request, session.token),
+      },
+    );
   }
   async publicKey(request, user) {
     const { publicKey } = await readBody(request);
@@ -465,15 +557,87 @@ export class ChatRoom {
         .public_key !== normalized
     )
       throw fail(
-        "Use the browser where you first enabled messaging. Your private key is stored there.",
+        "Refresh the app and unlock messaging with your account password.",
         409,
       );
-    if (!user.public_key) this.emit("users_changed", {});
+    if (!user.public_key) this.directoryChanged(user.id);
     return json({ message: "Public key registered" });
+  }
+  async saveMessagingKey(request, user) {
+    this.limit(`key-setup:${user.id}`, 5, 900000);
+    const { password, publicKey, backup, replaceLegacy } =
+      await readBody(request);
+    if (
+      typeof password !== "string" ||
+      encoder.encode(password).length > 72 ||
+      !validBackup(backup)
+    )
+      throw fail("Invalid messaging key backup.");
+    if (!(await bcrypt.compare(password, user.password_hash)))
+      throw fail("Current password is incorrect.");
+    if (
+      !publicKey ||
+      publicKey.kty !== "EC" ||
+      publicKey.crv !== "P-256" ||
+      publicKey.d ||
+      typeof publicKey.x !== "string" ||
+      typeof publicKey.y !== "string"
+    )
+      throw fail("Invalid public key.");
+    try {
+      await crypto.subtle.importKey(
+        "jwk",
+        publicKey,
+        { name: "ECDH", namedCurve: "P-256" },
+        false,
+        [],
+      );
+    } catch {
+      throw fail("Invalid public key.");
+    }
+    const normalized = JSON.stringify({
+      kty: "EC",
+      crv: "P-256",
+      x: publicKey.x,
+      y: publicKey.y,
+    });
+    this.ctx.storage.transactionSync(() => {
+      const current = this.one(
+        "SELECT public_key,password_hash FROM users WHERE id = ?",
+        user.id,
+      );
+      if (current.password_hash !== user.password_hash)
+        throw fail("Your password changed. Please sign in again.", 409);
+      if (
+        this.one("SELECT user_id FROM account_keys WHERE user_id = ?", user.id)
+      )
+        throw fail(
+          "Account messaging is already enabled. Sign in to unlock it.",
+          409,
+        );
+      if (current.public_key && replaceLegacy !== true)
+        throw fail("Confirm the switch from browser messaging first.", 409);
+      this.sql.exec(
+        "INSERT INTO account_keys (user_id,backup,version) VALUES (?,?,1)",
+        user.id,
+        JSON.stringify(backup),
+      );
+      this.sql.exec(
+        "UPDATE users SET public_key = ? WHERE id = ?",
+        normalized,
+        user.id,
+      );
+    });
+    this.directoryChanged(user.id);
+    return json({
+      message: "Messaging is now linked to your account.",
+      version: 1,
+    });
   }
   async changePassword(request, user) {
     this.limit(`password:${user.id}`, 5, 900000);
-    const { currentPassword, newPassword } = await readBody(request);
+    const { currentPassword, newPassword, keyBackup, keyVersion } =
+      await readBody(request);
     if (
       typeof currentPassword !== "string" ||
       encoder.encode(currentPassword).length > 72 ||
@@ -484,6 +648,18 @@ export class ChatRoom {
       );
     if (!(await bcrypt.compare(currentPassword, user.password_hash)))
       throw fail("Current password is incorrect.");
+    const accountKey = this.one(
+      "SELECT version,backup FROM account_keys WHERE user_id = ?",
+      user.id,
+    );
+    if (
+      accountKey &&
+      (!validBackup(keyBackup) || keyVersion !== accountKey.version)
+    )
+      throw fail(
+        "Unlock account messaging before changing your password.",
+        409,
+      );
     const passwordHash = await bcrypt.hash(newPassword, 12);
     const session = await this.sessionMaterial();
     this.ctx.storage.transactionSync(() => {
@@ -498,6 +674,19 @@ export class ChatRoom {
           "Your password changed in another session. Please sign in again.",
           409,
         );
+      const currentKey = this.one(
+        "SELECT backup FROM account_keys WHERE user_id = ?",
+        user.id,
+      );
+      if (currentKey?.backup !== accountKey?.backup)
+        throw fail("Messaging settings changed. Please try again.", 409);
+      if (accountKey) {
+        this.sql.exec(
+          "UPDATE account_keys SET backup = ? WHERE user_id = ?",
+          JSON.stringify(keyBackup),
+          user.id,
+        );
+      }
       this.sql.exec("DELETE FROM sessions WHERE user_id = ?", user.id);
       this.insertSession(user.id, session);
     });
@@ -587,6 +776,8 @@ export class ChatRoom {
           !/^[A-Za-z0-9+/]{16}$/.test(iv)
         )
           throw fail("Invalid message data.");
+        if (!canChat(user.id, receiverId, this.ownerId()))
+          throw fail("You can only chat with roseler.", 403);
         const receiver = this.one(
           "SELECT id, public_key FROM users WHERE id = ?",
           receiverId,
@@ -616,7 +807,7 @@ export class ChatRoom {
         this.emit("receive_message", message, receiverId);
         this.emit("receive_message", message, user.id, ws);
       } else if (packet.event === "typing" || packet.event === "stop_typing") {
-        if (positiveId(data.receiverId))
+        if (canChat(user.id, data.receiverId, this.ownerId()))
           this.emit(
             packet.event === "typing" ? "user_typing" : "user_stopped_typing",
             { userId: user.id },
@@ -625,9 +816,15 @@ export class ChatRoom {
       } else if (packet.event === "message_delivered") {
         if (!positiveId(data.id)) return;
         const message = this.one(
-          "UPDATE messages SET delivered = 1 WHERE id = ? AND receiver_id = ? RETURNING sender_id",
+          "SELECT sender_id FROM messages WHERE id = ? AND receiver_id = ?",
           data.id,
           user.id,
+        );
+        if (!message || !canChat(user.id, message.sender_id, this.ownerId()))
+          return;
+        this.sql.exec(
+          "UPDATE messages SET delivered = 1 WHERE id = ?",
+          data.id,
         );
         if (message)
           this.emit("message_delivered", { id: data.id }, message.sender_id);

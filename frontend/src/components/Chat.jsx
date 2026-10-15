@@ -6,6 +6,7 @@ import { getUser, clearAuth, setUser } from "../utils/auth";
 import { initializeIdentity } from "../utils/encryption";
 import ChatWindow from "./ChatWindow";
 import Profile from "./Profile";
+import MessagingAccess from "./MessagingAccess";
 import Icon from "./Icon";
 export default function Chat() {
   const [currentUser, setCurrentUser] = useState(getUser);
@@ -18,7 +19,6 @@ export default function Chat() {
   const [profile, setProfile] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [keyError, setKeyError] = useState("");
   const [socket, setSocket] = useState(null);
   const [status, setStatus] = useState("connecting");
   const [loggingOut, setLoggingOut] = useState(false);
@@ -41,6 +41,13 @@ export default function Chat() {
   const refreshUsers = useCallback(async () => {
     const { data } = await api.get("/auth/users");
     setUsers(data);
+    setSelectedId((id) =>
+      data.some((user) => user.id === id)
+        ? id
+        : data.length === 1
+          ? data[0].id
+          : null,
+    );
   }, []);
   useEffect(() => {
     let active = true;
@@ -53,8 +60,8 @@ export default function Chat() {
         try {
           await initializeIdentity(data.id);
           if (active) setKeyReady(true);
-        } catch (err) {
-          if (active) setKeyError(errorText(err, err.message));
+        } catch {
+          /* Password unlock and legacy migration are offered below. */
         }
         await refreshUsers();
         await refreshUnread();
@@ -194,19 +201,21 @@ export default function Chat() {
           </button>
         </div>
         <div className="conversation-heading">
-          <h2>People</h2>
+          <h2>{currentUser?.is_owner ? "Inbox" : "Contact"}</h2>
           <span>{users.length}</span>
         </div>
-        <label className="search-field">
-          <span className="sr-only">Search people</span>
-          <Icon name="search" size={16} />
-          <input
-            type="search"
-            placeholder="Search people…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </label>
+        {currentUser?.is_owner && (
+          <label className="search-field">
+            <span className="sr-only">Search people</span>
+            <Icon name="search" size={16} />
+            <input
+              type="search"
+              placeholder="Search people…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+        )}
         <nav className="user-list" aria-label="People">
           {loading ? (
             <p className="list-note" role="status">
@@ -252,7 +261,9 @@ export default function Chat() {
             <p className="list-note">
               {query
                 ? "No matching usernames."
-                : "No other accounts yet. Share the site with someone to start chatting."}
+                : currentUser?.is_owner
+                  ? "New accounts will appear here."
+                  : "Roseler is not available yet."}
             </p>
           )}
         </nav>
@@ -320,11 +331,6 @@ export default function Chat() {
             </button>
           </div>
         )}
-        {keyError && (
-          <div className="notice error" role="alert">
-            {keyError}
-          </div>
-        )}
         {profile ? (
           <Profile
             user={currentUser}
@@ -332,6 +338,15 @@ export default function Chat() {
             onPasswordChanged={() => {
               socket?.disconnect();
               socket?.connect();
+            }}
+          />
+        ) : !keyReady && !loading ? (
+          <MessagingAccess
+            userId={currentUser?.id}
+            onReady={() => {
+              setKeyReady(true);
+              refreshUsers().catch(() => {});
+              refreshUnread();
             }}
           />
         ) : (

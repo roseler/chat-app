@@ -38,9 +38,10 @@ class User {
   }
 
   static async getAllUsers(excludeUserId) {
-    return await db.query(
-      "SELECT id, username, public_key FROM users WHERE id != ?",
-      [excludeUserId],
+    const ownerId = await require("../utils/chatPolicy").ownerId();
+    return db.query(
+      "SELECT u.id, u.username, u.public_key, COALESCE(k.version,0) AS key_version FROM users u LEFT JOIN account_keys k ON k.user_id=u.id WHERE u.id != ? AND (? = ? OR u.id = ?) ORDER BY u.username COLLATE NOCASE",
+      [excludeUserId, excludeUserId, ownerId || -1, ownerId || -1],
     );
   }
 }

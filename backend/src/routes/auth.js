@@ -4,6 +4,9 @@ const rateLimit = require("express-rate-limit");
 const { ipKeyGenerator } = require("express-rate-limit");
 const validator = require("validator");
 const User = require("../models/User");
+const policy = require("../utils/chatPolicy");
+const db = require("../utils/database");
+const { validBackup } = require("../../../shared/key-backup.cjs");
 const {
   generateToken,
   authenticateToken,
@@ -96,6 +99,11 @@ router.post("/register", registerLimiter, async (req, res) => {
       return res.status(400).json({ error: "Invalid email address" });
     }
 
+    if (policy.isReserved(username, email))
+      return res
+        .status(400)
+        .json({ error: "That username or email is reserved." });
+
     // Validate password strength
     if (!validatePassword(password)) {
       return res.status(400).json({
@@ -121,7 +129,7 @@ router.post("/register", registerLimiter, async (req, res) => {
 
     res.status(201).json({
       message: "User created successfully",
-      user: { id: userId, username, email },
+      user: await policy.role({ id: userId, username, email }),
     });
   } catch (error) {
     // Provide more specific error messages
@@ -173,7 +181,11 @@ router.post("/login", loginLimiter, async (req, res) => {
 
     res.json({
       message: "Login successful",
-      user: { id: user.id, username: user.username, email: user.email },
+      user: await policy.role({
+        id: user.id,
+        username: user.username,
+        email: user.email,
+      }),
     });
   } catch (error) {
     if (process.env.NODE_ENV === "development") {
@@ -193,12 +205,103 @@ router.get(
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
-      res.json(user);
+      res.json(await policy.role(user));
     } catch (error) {
       if (process.env.NODE_ENV === "development") {
         console.error("Get user error:", error);
       }
       res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+router.get("/messaging-key", authenticateToken, async (req, res, next) => {
+  try {
+    const saved = await db.get(
+      "SELECT u.public_key,k.backup,k.version FROM users u LEFT JOIN account_keys k ON k.user_id=u.id WHERE u.id = ?",
+      [req.user.userId],
+    );
+    res.json({
+      backup: saved?.backup ? JSON.parse(saved.backup) : null,
+      version: saved?.version || 0,
+      publicKey: saved?.public_key ? JSON.parse(saved.public_key) : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+router.put(
+  "/messaging-key",
+  authenticateToken,
+  loginLimiter,
+  async (req, res, next) => {
+    try {
+      const { password, publicKey, backup, replaceLegacy } = req.body;
+      if (
+        typeof password !== "string" ||
+        Buffer.byteLength(password) > 72 ||
+        !validBackup(backup)
+      )
+        return res.status(400).json({ error: "Invalid messaging key backup." });
+      const user = await User.findByUsername(req.user.username);
+      if (!(await User.verifyPassword(password, user.password_hash)))
+        return res
+          .status(400)
+          .json({ error: "Current password is incorrect." });
+      if (
+        !publicKey ||
+        publicKey.kty !== "EC" ||
+        publicKey.crv !== "P-256" ||
+        publicKey.d
+      )
+        return res.status(400).json({ error: "Invalid public key." });
+      try {
+        require("crypto").createPublicKey({ key: publicKey, format: "jwk" });
+      } catch {
+        return res.status(400).json({ error: "Invalid public key." });
+      }
+      const normalized = JSON.stringify({
+        kty: "EC",
+        crv: "P-256",
+        x: publicKey.x,
+        y: publicKey.y,
+      });
+      await db.transaction(async () => {
+        const current = await User.findByUsername(req.user.username);
+        const fail = (error) => {
+          throw Object.assign(new Error(error), { status: 409 });
+        };
+        if (current.password_hash !== user.password_hash)
+          fail("Your password changed. Please sign in again.");
+        if (
+          await db.get("SELECT user_id FROM account_keys WHERE user_id = ?", [
+            user.id,
+          ])
+        )
+          fail("Account messaging is already enabled. Sign in to unlock it.");
+        if (current.public_key && replaceLegacy !== true)
+          fail("Confirm the switch from browser messaging first.");
+        await db.run(
+          "INSERT INTO account_keys (user_id,backup,version) VALUES (?,?,1)",
+          [user.id, JSON.stringify(backup)],
+        );
+        await db.run("UPDATE users SET public_key = ? WHERE id = ?", [
+          normalized,
+          user.id,
+        ]);
+      });
+      const ownerId = await policy.ownerId();
+      if (user.id === ownerId) req.app.get("io").emit("users_changed");
+      else if (ownerId)
+        req.app.get("io").to(`user_${ownerId}`).emit("users_changed");
+      res.json({
+        message: "Messaging is now linked to your account.",
+        version: 1,
+      });
+    } catch (error) {
+      if (error.status)
+        return res.status(error.status).json({ error: error.message });
+      next(error);
     }
   },
 );
@@ -236,7 +339,7 @@ router.put(
       if (user.public_key !== normalized)
         return res.status(409).json({
           error:
-            "Use the browser where you first enabled messaging. Your private key is stored there.",
+            "Refresh the app and unlock messaging with your account password.",
         });
       res.json({ message: "Public key updated successfully" });
     } catch (error) {
@@ -272,7 +375,7 @@ router.get(
   async (req, res) => {
     try {
       const { getOnlineUsers } = require("../socket/handlers");
-      const onlineUsers = getOnlineUsers();
+      const onlineUsers = await getOnlineUsers(req.user.userId);
       // Return empty array if no online users (instead of error)
       res.json(onlineUsers || []);
     } catch (error) {
@@ -299,7 +402,7 @@ router.put(
   loginLimiter,
   async (req, res, next) => {
     try {
-      const { currentPassword, newPassword } = req.body;
+      const { currentPassword, newPassword, keyBackup, keyVersion } = req.body;
       if (typeof currentPassword !== "string" || !validatePassword(newPassword))
         return res.status(400).json({
           error:
@@ -310,14 +413,45 @@ router.put(
         return res
           .status(400)
           .json({ error: "Current password is incorrect." });
+      const accountKey = await db.get(
+        "SELECT backup,version FROM account_keys WHERE user_id = ?",
+        [user.id],
+      );
+      if (
+        accountKey &&
+        (!validBackup(keyBackup) || keyVersion !== accountKey.version)
+      )
+        return res.status(409).json({
+          error: "Unlock account messaging before changing your password.",
+        });
       const hash = await require("bcrypt").hash(newPassword, 12);
-      const db = require("../utils/database");
-      await db.run("UPDATE users SET password_hash = ? WHERE id = ?", [
-        hash,
-        req.user.userId,
-      ]);
-      await db.run("DELETE FROM sessions WHERE user_id = ?", [req.user.userId]);
-      await generateToken(req.user.userId, req.user.username, res);
+      await db.transaction(async () => {
+        const updated = await db.run(
+          "UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ?",
+          [hash, user.id, user.password_hash],
+        );
+        if (!updated.changes)
+          throw Object.assign(
+            new Error("Password changed. Please sign in again."),
+            { status: 409 },
+          );
+        const currentKey = await db.get(
+          "SELECT backup FROM account_keys WHERE user_id = ?",
+          [user.id],
+        );
+        if (currentKey?.backup !== accountKey?.backup)
+          throw Object.assign(
+            new Error("Messaging settings changed. Please try again."),
+            { status: 409 },
+          );
+        if (accountKey)
+          await db.run("UPDATE account_keys SET backup = ? WHERE user_id = ?", [
+            JSON.stringify(keyBackup),
+            user.id,
+          ]);
+        await db.run("DELETE FROM sessions WHERE user_id = ?", [user.id]);
+        await generateToken(user.id, user.username, res);
+      });
       req.app.get("io").in(`user_${req.user.userId}`).disconnectSockets(true);
       res.json({
         message: "Password updated. Other sessions have been signed out.",

@@ -1,12 +1,21 @@
 const Message = require("../models/Message");
 const User = require("../models/User");
 const { sessionUser } = require("../middleware/auth");
+const policy = require("../utils/chatPolicy");
 const onlineUsers = new Map();
-const getOnlineUsers = () =>
-  Array.from(onlineUsers, ([userId, sockets]) => ({
-    userId,
-    username: sockets.values().next().value,
-  }));
+const getOnlineUsers = async (viewerId) =>
+  policy.visibleOnline(
+    Array.from(onlineUsers, ([userId, sockets]) => ({
+      userId,
+      username: sockets.values().next().value,
+    })),
+    viewerId,
+    await policy.ownerId(),
+  );
+const presence = async (io) => {
+  for (const [userId] of onlineUsers)
+    io.to(`user_${userId}`).emit("online_users", await getOnlineUsers(userId));
+};
 const setupSocketHandlers = (io) => {
   io.use(async (socket, next) => {
     try {
@@ -31,7 +40,7 @@ const setupSocketHandlers = (io) => {
     if (!onlineUsers.has(socket.userId))
       onlineUsers.set(socket.userId, new Map());
     onlineUsers.get(socket.userId).set(socket.id, socket.username);
-    io.emit("online_users", getOnlineUsers());
+    void presence(io).catch(() => {});
     // Revalidate sessions for long-lived connections and logout/password changes.
     socket.use(async (_packet, next) => {
       try {
@@ -63,6 +72,8 @@ const setupSocketHandlers = (io) => {
           !/^[A-Za-z0-9+/]{16}$/.test(iv)
         )
           return reply({ error: "Invalid message data." });
+        if (!(await policy.allowed(socket.userId, receiverId)))
+          return reply({ error: "You can only chat with roseler." });
         const [sender, receiver] = await Promise.all([
           User.findById(socket.userId),
           User.findById(receiverId),
@@ -95,8 +106,8 @@ const setupSocketHandlers = (io) => {
       ["typing", "user_typing"],
       ["stop_typing", "user_stopped_typing"],
     ]) {
-      socket.on(event, (data = {}) => {
-        if (data && Number.isSafeInteger(data.receiverId))
+      socket.on(event, async (data = {}) => {
+        if (data && (await policy.allowed(socket.userId, data.receiverId)))
           socket
             .to(`user_${data.receiverId}`)
             .emit(outgoing, { userId: socket.userId });
@@ -109,8 +120,11 @@ const setupSocketHandlers = (io) => {
           "SELECT sender_id FROM messages WHERE id = ? AND receiver_id = ?",
           [data.id, socket.userId],
         )
-        .then((message) => {
-          if (message)
+        .then(async (message) => {
+          if (
+            message &&
+            (await policy.allowed(socket.userId, message.sender_id))
+          )
             io.to(`user_${message.sender_id}`).emit("message_delivered", {
               id: data.id,
             });
@@ -122,7 +136,7 @@ const setupSocketHandlers = (io) => {
       const sockets = onlineUsers.get(socket.userId);
       sockets?.delete(socket.id);
       if (!sockets?.size) onlineUsers.delete(socket.userId);
-      io.emit("online_users", getOnlineUsers());
+      void presence(io).catch(() => {});
     });
   });
 };

@@ -17,20 +17,24 @@ class Message {
   }
 
   static async getUnreadBySender(userId) {
+    const ownerId = (await require("../utils/chatPolicy").ownerId()) || -1;
     return db.query(
-      "SELECT sender_id AS userId, COUNT(*) AS count FROM messages WHERE receiver_id = ? AND read_status = 0 AND datetime(timestamp) >= datetime(?) GROUP BY sender_id",
-      [userId, new Date(Date.now() - 86400000).toISOString()],
+      "SELECT sender_id AS userId, COUNT(*) AS count FROM messages WHERE receiver_id = ? AND read_status = 0 AND datetime(timestamp) >= datetime(?) AND (? = ? OR sender_id = ?) GROUP BY sender_id",
+      [
+        userId,
+        new Date(Date.now() - 86400000).toISOString(),
+        userId,
+        ownerId,
+        ownerId,
+      ],
     );
   }
 
   static async getUnreadCount(userId) {
-    // Only count unread messages from the last 24 hours
-    const hoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const result = await db.get(
-      "SELECT COUNT(*) as count FROM messages WHERE receiver_id = ? AND read_status = 0 AND datetime(timestamp) >= datetime(?)",
-      [userId, hoursAgo],
+    return (await this.getUnreadBySender(userId)).reduce(
+      (sum, row) => sum + row.count,
+      0,
     );
-    return result ? result.count : 0;
   }
 
   // Delete messages older than 24 hours

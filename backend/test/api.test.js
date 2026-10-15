@@ -137,7 +137,7 @@ test("authentication, input validation, key pinning, session revocation, and pas
     (await request("/messages/999/read", { method: "PUT" })).status,
     404,
   );
-  assert.equal((await request("/messages/conversation/1")).status, 200);
+  assert.equal((await request("/messages/conversation/1")).status, 403);
   const unread = await (await request("/messages/unread")).json();
   assert.deepEqual(unread, { count: 0, bySender: [] });
   assert.equal(
@@ -149,15 +149,61 @@ test("authentication, input validation, key pinning, session revocation, and pas
     ).status,
     400,
   );
+  const { createAccountKey, openAccountKey, sealAccountKey } =
+    await import("../../frontend/src/utils/account-key.mjs");
+  const created = await createAccountKey("Example123!", userId);
+  const setup = {
+    password: "Example123!",
+    publicKey: created.publicKey,
+    backup: created.backup,
+  };
+  assert.equal(
+    (await request("/auth/messaging-key", { method: "PUT", body: setup }))
+      .status,
+    409,
+  );
+  assert.equal(
+    (
+      await request("/auth/messaging-key", {
+        method: "PUT",
+        body: { ...setup, replaceLegacy: true },
+      })
+    ).status,
+    200,
+  );
+  assert.deepEqual(
+    (await (await request("/auth/messaging-key")).json()).backup,
+    created.backup,
+  );
+  assert.equal(
+    (
+      await request("/auth/password", {
+        method: "PUT",
+        body: { currentPassword: "Example123!", newPassword: "Changed123!" },
+      })
+    ).status,
+    409,
+  );
+  const raw = await openAccountKey(created.backup, "Example123!", userId);
+  const keyBackup = await sealAccountKey(raw, "Changed123!", userId);
   const previous = cookie;
   const changed = await request("/auth/password", {
     method: "PUT",
-    body: { currentPassword: "Example123!", newPassword: "Changed123!" },
+    body: {
+      currentPassword: "Example123!",
+      newPassword: "Changed123!",
+      keyBackup,
+      keyVersion: 1,
+    },
   });
   assert.equal(changed.status, 200);
   cookie = changed.headers.get("set-cookie").split(";")[0];
   assert.equal((await request("/auth/me", { session: previous })).status, 401);
   assert.equal((await request("/auth/me")).status, 200);
+  const saved = (await (await request("/auth/messaging-key")).json()).backup;
+  assert.deepEqual(await openAccountKey(saved, "Changed123!", userId), raw);
+  await assert.rejects(openAccountKey(saved, "Example123!", userId));
+  new Uint8Array(raw).fill(0);
   assert.equal((await request("/auth/logout", { method: "POST" })).status, 200);
   assert.equal((await request("/auth/me")).status, 401);
   assert.equal(

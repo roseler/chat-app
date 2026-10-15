@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import api, { errorText } from "../utils/api";
 import { clearAuth, setUser } from "../utils/auth";
+import { unlockIdentity } from "../utils/encryption";
 import PasswordField from "./PasswordField";
 export default function AuthPage({ register = false }) {
   const [username, setUsername] = useState("");
@@ -35,6 +36,13 @@ export default function AuthPage({ register = false }) {
       );
       clearAuth();
       setUser(data.user);
+      try {
+        await unlockIdentity(data.user.id, password);
+      } catch {
+        /* Chat offers password unlock or an explicit legacy migration. */
+      }
+      setPassword("");
+      setConfirm("");
       navigate("/chat");
     } catch (err) {
       setError(errorText(err, "Check your connection and try again."));
@@ -59,7 +67,7 @@ export default function AuthPage({ register = false }) {
         <h1 id="auth-title">{register ? "Create an account" : "Sign in"}</h1>
         <p className="auth-description">
           {register
-            ? "Choose a username so people can find you."
+            ? "Create an account to message roseler."
             : "Enter your username and password."}
         </p>
         <form className="auth-form" onSubmit={submit} aria-busy={loading}>

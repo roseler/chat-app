@@ -1,4 +1,10 @@
 import api from "./api";
+import {
+  createAccountKey,
+  openAccountKey,
+  importAccountKey,
+  sealAccountKey,
+} from "./account-key.mjs";
 let database;
 function openDatabase() {
   if (!database)
@@ -33,7 +39,19 @@ async function storedKey(id, value) {
       reject(new Error("Unable to save your messaging key."));
   });
 }
+async function replaceStoredKey(id, value) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction("keys", "readwrite");
+    transaction.objectStore("keys").put(value, String(id));
+    transaction.oncomplete = resolve;
+    transaction.onerror = () =>
+      reject(new Error("Unable to save your messaging key."));
+  });
+}
 const identities = new Map();
+const normalized = (key) =>
+  JSON.stringify({ kty: "EC", crv: "P-256", x: key.x, y: key.y });
 export function initializeIdentity(userId) {
   if (!identities.has(userId))
     identities.set(
@@ -41,18 +59,16 @@ export function initializeIdentity(userId) {
       (async () => {
         if (!window.crypto?.subtle)
           throw new Error("Messaging requires HTTPS or localhost.");
-        let pair = await storedKey(userId);
-        if (!pair) {
-          // Non-exportable private key; the public half remains exportable.
-          pair = await crypto.subtle.generateKey(
-            { name: "ECDH", namedCurve: "P-256" },
-            false,
-            ["deriveBits"],
-          );
-          pair = await storedKey(userId, pair);
-        }
-        const publicKey = await crypto.subtle.exportKey("jwk", pair.publicKey);
-        await api.put("/auth/public-key", { publicKey });
+        const pair = await storedKey(userId);
+        const { data } = await api.get("/auth/messaging-key");
+        if (!data.backup)
+          throw new Error("Set up messaging for your account to continue.");
+        if (
+          !pair?.accountBased ||
+          normalized(await crypto.subtle.exportKey("jwk", pair.publicKey)) !==
+            normalized(data.publicKey)
+        )
+          throw new Error("Enter your password to unlock account messaging.");
         return pair;
       })().catch((error) => {
         identities.delete(userId);
@@ -61,18 +77,82 @@ export function initializeIdentity(userId) {
     );
   return identities.get(userId);
 }
+export async function unlockIdentity(
+  userId,
+  password,
+  { replaceLegacy = false } = {},
+) {
+  let { data } = await api.get("/auth/messaging-key");
+  let pair;
+  if (!data.backup) {
+    if (data.publicKey && !replaceLegacy)
+      throw new Error("Confirm the switch from browser messaging first.");
+    const created = await createAccountKey(password, userId);
+    try {
+      await api.put("/auth/messaging-key", {
+        password,
+        publicKey: created.publicKey,
+        backup: created.backup,
+        replaceLegacy,
+      });
+      pair = created.pair;
+    } catch (error) {
+      if (error.response?.status !== 409) throw error;
+      data = (await api.get("/auth/messaging-key")).data;
+      if (!data.backup) throw error;
+    }
+  }
+  if (!pair) {
+    const raw = await openAccountKey(data.backup, password, userId);
+    try {
+      pair = await importAccountKey(raw, data.publicKey);
+    } finally {
+      new Uint8Array(raw).fill(0);
+    }
+  }
+  const previous = await storedKey(userId);
+  if (previous && !previous.accountBased)
+    await storedKey(`legacy:${userId}`, previous);
+  pair.accountBased = true;
+  await replaceStoredKey(userId, pair);
+  identities.set(userId, Promise.resolve(pair));
+  return pair;
+}
+export async function passwordKeyUpdate(userId, currentPassword, newPassword) {
+  const { data } = await api.get("/auth/messaging-key");
+  if (!data.backup) return {};
+  const raw = await openAccountKey(data.backup, currentPassword, userId);
+  try {
+    return {
+      keyBackup: await sealAccountKey(raw, newPassword, userId),
+      keyVersion: data.version,
+    };
+  } finally {
+    new Uint8Array(raw).fill(0);
+  }
+}
 export async function getSharedKey(userId, otherUser) {
   if (!otherUser?.public_key)
     throw new Error(
       "This person needs to sign in before you can send encrypted messages.",
     );
-  const pinned = await storedKey(`peer:${userId}:${otherUser.id}`, {
+  const peerId = `peer:${userId}:${otherUser.id}`;
+  const pinned = await storedKey(peerId, {
     publicKey: otherUser.public_key,
+    version: otherUser.key_version || 0,
   });
-  if (pinned.publicKey !== otherUser.public_key)
-    throw new Error(
-      "This person’s messaging key changed. Sending is paused to protect your conversation.",
-    );
+  if (pinned.publicKey !== otherUser.public_key) {
+    if ((otherUser.key_version || 0) <= (pinned.version || 0))
+      throw new Error(
+        "This person’s messaging key changed unexpectedly. Sending is paused.",
+      );
+    // Only the password-authenticated, one-time account migration advances this version.
+    await storedKey(`legacy-${peerId}`, pinned);
+    await replaceStoredKey(peerId, {
+      publicKey: otherUser.public_key,
+      version: otherUser.key_version,
+    });
+  }
   const pair = await initializeIdentity(userId);
   const publicKey = await crypto.subtle.importKey(
     "jwk",

@@ -2,6 +2,12 @@
 
 A responsive text chat app with a restrained charcoal theme, live conversations, unread counts, typing indicators, timestamps, delivery/read receipts, and browser-side encryption.
 
+## Conversations
+
+This deployment is a private inbox for `roseler`: visitors see and can message only that account. The owner sees all other accounts. The server enforces this policy for contacts, presence, messages, history, unread counts, typing, and receipts.
+
+On upgrade, the existing account with username `roseler` and email `admin@roseler.tech` is pinned by ID in `app_settings`. Public registration reserves both identifiers and cannot create or claim the owner role. If the matching account is absent, messaging fails closed until the operator provisions the intended account directly in storage. Existing accounts, sessions, and keys are preserved; previous visitor-to-visitor conversations become inaccessible through the app and remain subject to normal message expiry.
+
 ## Run locally
 
 Use Node.js 22.12 or newer (tested with Node.js 24).
@@ -36,9 +42,9 @@ The full app runs on Cloudflare Workers with a SQLite-backed Durable Object and 
 
 ## Messaging keys and existing messages
 
-New messages use ECDH P-256, HKDF-SHA-256, and AES-256-GCM through Web Crypto. Private keys are non-exportable CryptoKeys persisted in IndexedDB. Keys are tied to the browser origin and account; signing out preserves the key so signing back in can decrypt history. A recipient must sign in once to initialize messaging. HTTPS or localhost is required.
+New messages use ECDH P-256, HKDF-SHA-256, and AES-256-GCM through Web Crypto. Each account has an encrypted private-key backup in the database. The client wraps the key with AES-256-GCM using PBKDF2-SHA-256 (600,000 iterations and a random salt) derived from the account password, binding it to the account ID. Signing in on another device or site origin restores the same key. Password changes atomically replace the password hash and re-encrypt the same backup with the new password. Unlocked private keys are cached locally as non-exportable CryptoKeys; passwords are not saved in browser storage. HTTPS or localhost is required.
 
-**There is no key recovery or device transfer yet.** Clearing site storage or using a different browser prevents sending/decrypting for an account whose key was already registered. Keys are never silently replaced. Peer keys are pinned on first use, and changes block sending. This is not an independently audited messaging protocol; see [SECURITY.md](SECURITY.md) for limitations.
+Existing browser-only identities need a one-time, password-authenticated switch under **Link messaging to your account**. The app requires explicit acknowledgement that older messages cannot be opened with the new key. No accounts or message rows are deleted, and the original local key is retained separately. The old non-exportable private key cannot be recovered from the server. New messages then follow the account across devices. Peer pins accept only the server's version advance for this authenticated one-time migration; unexpected changes still block sending. There is no forgotten-password recovery. This is not an independently audited protocol; see [SECURITY.md](SECURITY.md).
 
 The former encryption derived keys from public user IDs, so it did not provide meaningful confidentiality. Existing legacy messages remain readable with a “Legacy encryption” warning. They cannot be retroactively made private. No existing accounts or messages are migrated or deleted by the upgrade itself.
 

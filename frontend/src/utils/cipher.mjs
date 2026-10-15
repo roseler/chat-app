@@ -48,6 +48,6 @@ export async function decryptMessage(content, iv, key, legacyIds) {
     );
     return new TextDecoder().decode(plaintext);
   } catch {
-    return "[Unable to decrypt this message in this browser.]";
+    return "[Unable to decrypt this message with your current account key. It may use an earlier key.]";
   }
 }

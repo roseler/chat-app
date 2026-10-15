@@ -1,5 +1,6 @@
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
+const { AsyncLocalStorage } = require("node:async_hooks");
 require("dotenv").config();
 
 const DB_PATH =
@@ -8,6 +9,8 @@ const DB_PATH =
 class Database {
   constructor() {
     this.db = null;
+    this.queue = Promise.resolve();
+    this.transactionContext = new AsyncLocalStorage();
   }
 
   connect() {
@@ -30,6 +33,8 @@ class Database {
   initTables() {
     return new Promise((resolve, reject) => {
       const queries = [
+        `CREATE TABLE IF NOT EXISTS account_keys (user_id INTEGER PRIMARY KEY REFERENCES users(id), backup TEXT NOT NULL, version INTEGER NOT NULL)`,
+        `CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
         `CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -79,40 +84,70 @@ class Database {
     });
   }
 
-  query(sql, params = []) {
-    return new Promise((resolve, reject) => {
-      this.db.all(sql, params, (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(rows);
+  schedule(operation) {
+    if (this.transactionContext.getStore() === this) return operation();
+    const next = this.queue.then(operation);
+    this.queue = next.catch(() => {});
+    return next;
+  }
+  transaction(operation) {
+    return this.schedule(() =>
+      this.transactionContext.run(this, async () => {
+        await this.run("BEGIN IMMEDIATE");
+        try {
+          const result = await operation();
+          await this.run("COMMIT");
+          return result;
+        } catch (error) {
+          await this.run("ROLLBACK");
+          throw error;
         }
-      });
-    });
+      }),
+    );
+  }
+  query(sql, params = []) {
+    return this.schedule(
+      () =>
+        new Promise((resolve, reject) => {
+          this.db.all(sql, params, (err, rows) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve(rows);
+            }
+          });
+        }),
+    );
   }
 
   get(sql, params = []) {
-    return new Promise((resolve, reject) => {
-      this.db.get(sql, params, (err, row) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(row);
-        }
-      });
-    });
+    return this.schedule(
+      () =>
+        new Promise((resolve, reject) => {
+          this.db.get(sql, params, (err, row) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve(row);
+            }
+          });
+        }),
+    );
   }
 
   run(sql, params = []) {
-    return new Promise((resolve, reject) => {
-      this.db.run(sql, params, function (err) {
-        if (err) {
-          reject(err);
-        } else {
-          resolve({ id: this.lastID, changes: this.changes });
-        }
-      });
-    });
+    return this.schedule(
+      () =>
+        new Promise((resolve, reject) => {
+          this.db.run(sql, params, function (err) {
+            if (err) {
+              reject(err);
+            } else {
+              resolve({ id: this.lastID, changes: this.changes });
+            }
+          });
+        }),
+    );
   }
 
   close() {
